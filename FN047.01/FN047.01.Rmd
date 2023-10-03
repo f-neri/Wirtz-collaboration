@@ -1,0 +1,104 @@
+---
+title: "FN047.01"
+author: "Francesco Neri"
+date: "`r Sys.Date()`"
+output: html_document
+---
+
+Analysis of FN047.01 (see details on [benchling](https://benchling.com/francesconeri/f/lib_zYqsGFL4-senescence-morphology-study/etr_1qDjrVUH-fn047-01_hmvecl_fs-ss_ir_dna-content-after-g1-enrichment/edit))
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+
+# libraries
+
+library(tidyverse)
+library(devtools)
+library(readxl)
+library(openxlsx)
+library(plater)
+
+# file paths to manually input
+
+input_files <- tribble(
+  ~IA_output_file_path, ~metadata_file_path,
+  "C:/Users/ffran/Dropbox/R/Wirtz-collaboration/FN047.01/IAoutput_Mock.xlsx", "C:/Users/ffran/Dropbox/R/Wirtz-collaboration/FN047.01/IAoutput_Mock_metadata.csv",
+  "C:/Users/ffran/Dropbox/R/Wirtz-collaboration/FN047.01/IAoutput_IR.xlsx", "C:/Users/ffran/Dropbox/R/Wirtz-collaboration/FN047.01/IAoutput_IR_metadata.csv"
+)
+
+# source functions
+
+## default folder path for functions
+functions_path <- "C:/Users/ffran/AppData/Local/R/functions"
+
+## df with files to source and corresponding folder path
+files_to_load <- tribble(
+  ~file_name, ~file_path,
+  "tidy_IAoutput.R",  functions_path,
+  "merge_plate_metadata.R", functions_path
+)
+
+## get full paths to fils
+files_to_load <- files_to_load %>%
+  mutate(.,
+       full_path = file.path(file_path, file_name)
+       )
+
+## source all files listed in files_to_load
+for (full_path in files_to_load$full_path) {
+  source(full_path)
+}
+
+```
+
+## Load data
+
+```{r load data}
+
+# create function to load data (i.e. import IA output, tidy, merge with plate metadata)
+
+load_data <- function(IA_output_file_path, metadata_file_path) {
+  
+  tidied_IAoutput <- tidy_IAoutput(file_path = IA_output_file_path)
+  
+  merge_plate_metadata(tidied_IAoutput_df = tidied_IAoutput,
+                       metadata = metadata_file_path)
+}
+
+# load data from files listed in input_files
+
+plates <- vector(mode = "list", length = nrow(input_files))
+
+for (i in seq_along(input_files)) {
+  plates[[i]] <- load_data(input_files$IA_output_file_path[i], input_files$metadata_file_path[i])
+}
+
+# merge data from multiple plates
+
+df <- bind_rows(plates)
+
+df
+
+```
+
+## G1/low vs G2/high DNA content threshold
+
+
+```{r threshold}
+
+# select DAPI threshold value
+
+# plot histogram DAPI staining + DApi threshold
+
+```
+
+
+## G1/G2 proportion in SEN vs CTL cells
+
+
+```{r}
+
+# plot proportions, SEN vs CTL
+
+```
+
