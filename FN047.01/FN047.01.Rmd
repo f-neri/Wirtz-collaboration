@@ -17,6 +17,7 @@ library(devtools)
 library(readxl)
 library(openxlsx)
 library(plater)
+library(ggpubr)
 
 # file paths to manually input
 
@@ -209,18 +210,18 @@ plot_G1_G2_percent_stacked(df_proportions, bars = serum, faceting = condition)
 
 ```
 
+It truly seems that the reduction in the fraction of G2 cells observed in CTL condition upon G1-enrichment (SS) is maintained after IR, potentially suggesting that truly DNA content at sen induction correlates with DNA content of cells once senescent
+
+Is this reduction in the proportion of G2 cells statistically
+
 ## Stats
 
-```{r stats}
+```{r stats proportions, fig.dim = c(4,4)}
 
 # testing only G2 values (no sense in testing reciprocal as well)
 
 df_proportions_G2 <- df_proportions %>%
   filter(DNA_content == "G2")
-
-# changing serum to factor
-
-df_proportions_G2$serum <- df_proportions_G2$serum %>% as.factor()
 
 # generating dfs with only CTL or IR for serum comparison
 
@@ -230,9 +231,114 @@ df_proportions_G2_CTL <- df_proportions_G2 %>%
 df_proportions_G2_IR <- df_proportions_G2 %>%
   filter(condition == "IR")
 
-# non parametric t tests
+# boxplots 
 
+boxplot <- function(df, y, ylab) {
+  
+  y <- enquo(y) # quoting
+  
+  ggplot(data = df,
+         aes(
+           y = !!y, # unquoting
+           x = serum
+           )
+         ) +
+    geom_boxplot(aes(color = condition)) +
+    geom_point(data = filter(df, DNA_content == "G2"),
+               aes(color = condition),
+               fill = "white",
+               size = 3,
+               shape = 21) +
+    labs(y = ylab) +
+    scale_y_continuous(labels = scales::percent,
+                       limits = c(0,1),
+                       breaks = seq(0,2,length.out = 11)) +
+    scale_fill_manual(values = c("lightgrey", "darkgrey")) +
+    guides(fill = guide_legend(title = "DNA content")) +
+    color_scale_conditions
+}
+
+# plot proportions 
+
+boxplot(df_proportions_G2_IR, proportion, "% of G2 cells") +
+  stat_compare_means(label.y = 0.9)
+
+boxplot(df_proportions_G2_CTL, proportion, "% of G2 cells") +
+  stat_compare_means(label.y = 0.9)
 
 
 ```
 
+The reduction in % of G2 cells is indeed statistically significant.
+
+While the exact proportions of G1 and G2 cells are not maintained after sen induction, are the relative fold change between FS and SS conditions maintained after IR?
+
+```{r stats fold change of proportions, fig.dim = c(4,4)}
+
+# generate df with means 
+
+df_proportions_G2_mean <- df_proportions_G2 %>%
+  group_by(condition, serum) %>%
+  summarise(mean_prop = mean(proportion))
+
+# add mean values to dfs
+
+add_mean_foldchange <- function(df) {
+  new_df <- df %>%
+    left_join(df_proportions_G2_mean)
+  
+  lowest_mean <- new_df$mean_prop %>%
+    unique() %>%
+    min()
+  
+  new_df <- new_df %>%
+    mutate(fold_change = proportion/lowest_mean)
+}
+
+CTL_foldchange <- add_mean_foldchange(df_proportions_G2_CTL)
+
+IR_foldchange <- add_mean_foldchange(df_proportions_G2_IR)
+
+# new boxplot function (no Y axis scaling nor limits)
+
+boxplot_foldchange <- function(df, y, ylab, x = serum) {
+  
+  y <- enquo(y) # quoting
+  x <- enquo(x) # quoting
+  
+  ggplot(data = df,
+         aes(
+           y = !!y, # unquoting
+           x = !!x # unquoting
+           )
+         ) +
+    geom_boxplot(aes(color = condition)) +
+    geom_point(data = filter(df, DNA_content == "G2"),
+               aes(color = condition),
+               fill = "white",
+               size = 3,
+               shape = 21) +
+    labs(y = ylab) +
+    scale_fill_manual(values = c("lightgrey", "darkgrey")) +
+    guides(fill = guide_legend(title = "DNA content")) +
+    color_scale_conditions
+}
+
+# plot
+
+boxplot_foldchange(CTL_foldchange, y = fold_change, ylab = "G2 % Fold Change") +
+  stat_compare_means(label.y = 2.2, label.x = 1.5)
+
+boxplot_foldchange(IR_foldchange, y = fold_change, ylab = "G2 % Fold Change") +
+  stat_compare_means(label.y = 2.35, label.x = 1.5)
+
+# df with both CTL and IR 
+
+foldchange <- bind_rows(CTL_foldchange, IR_foldchange) %>%
+  filter(serum == "FS")
+
+boxplot_foldchange(foldchange, y = fold_change, ylab = "G2 % Fold Change", x = condition) +
+  stat_compare_means(label.y = 2.35, label.x = 0.7)
+
+```
+It appears the relative fold change are very similar (~2x reduction in % of G2 cells). However, there's still a statistically significant difference in the relative reduction between CTL and IR, indicating that the fold change between FS and SS across the 2 conditions (CTL and IR) is not perfectly maintained.
