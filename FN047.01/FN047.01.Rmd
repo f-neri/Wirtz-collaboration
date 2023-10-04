@@ -49,6 +49,14 @@ for (full_path in files_to_load$full_path) {
   source(full_path)
 }
 
+# plots themes
+
+old_theme <- theme_set(theme_bw())
+theme_update(
+  legend.title = element_text(size=12), #change legend title font size
+  legend.text = element_text(size=10) #change legend text font size
+)
+
 ```
 
 ## Load data
@@ -84,11 +92,36 @@ df
 ## G1/low vs G2/high DNA content threshold
 
 
-```{r threshold}
+```{r thresholds}
 
 # select DAPI threshold value
 
-# plot histogram DAPI staining + DApi threshold
+df <- df %>%
+  mutate(DAPI_threshold = ifelse(
+    condition == "CTL",
+    7500000, # added manually based on histogram
+    10000000) # added manually based on histogram
+  )
+
+# conditions colors
+
+fill_scale_conditions <- scale_fill_brewer(palette = "Dark2", limits = sort(unique(df$condition)))
+
+# plot histogram DAPI staining + DAPI threshold
+
+ggplot(df) +
+  geom_histogram(
+    aes(x = DAPI,
+        fill = condition),
+    bins = 100) +
+  geom_vline(aes(xintercept = DAPI_threshold)) +
+  facet_grid(condition ~ serum) +
+  scale_x_continuous(limits = c(0,quantile(df$DAPI, 0.99))) +
+  labs(y = "Counts",
+       x = "DNA Content (integrated DAPI staining, A.U.)",
+       fill = "Condition") +
+  fill_scale_conditions
+
 
 ```
 
@@ -96,9 +129,110 @@ df
 ## G1/G2 proportion in SEN vs CTL cells
 
 
-```{r}
+```{r G1 vs G2 proportions}
 
-# plot proportions, SEN vs CTL
+# add DNA content label (G1 vs G2) to df
+
+df <- df %>%
+  mutate(
+    DNA_content = ifelse(DAPI > DAPI_threshold, "G2", "G1")
+    )
+
+# generate summary df with % of G1 and G2 cells per well
+
+## df with tot cell counts per well
+
+grouping_variables <- c("plate", "well", "condition", "serum")
+
+df_tot_counts <- df %>%
+  group_by_at(vars(all_of(grouping_variables))) %>%
+  summarise(tot_count = n())
+
+## df summary with G1 & G2 counts
+
+df_G1_G2_counts <- df %>%
+  group_by_at(vars(all_of(c(grouping_variables, "DNA_content")))) %>%
+  summarise(sub_count = n())
+
+## join dfs and calculate proportions
+
+df_proportions <- left_join(df_G1_G2_counts, df_tot_counts) %>%
+  mutate(proportion = sub_count / tot_count)
+
+# plotting
+
+## conditions colors
+
+color_scale_conditions <- scale_color_brewer(palette = "Dark2", limits = sort(unique(df$condition)))
+
+## stacked bar plot function
+
+plot_G1_G2_percent_stacked <- function(df, bars, faceting) {
+  
+  # To enter column names as function arguments, those argument must
+  ## 1) be quoted (with enquo())
+  ## 2) be unquoted (with !!)
+  
+  bars <- enquo(bars) # quoting 
+  faceting <- enquo(faceting) # quoting
+  
+  ggplot(data = df,
+         aes(
+           y = proportion,
+           x = !!bars # unquoting
+           )
+         ) +
+    geom_bar(aes(fill = DNA_content),
+             position = "fill",
+             stat = "identity"
+             ) +
+    geom_point(data = filter(df, DNA_content == "G2"),
+               aes(color = condition),
+               fill = "white",
+               size = 3,
+               shape = 21) +
+    facet_grid(cols = vars(!!faceting)) + # unquoting
+    labs(y = "% of Cells") +
+    scale_y_continuous(labels = scales::percent,
+                       limits = c(0,1),
+                       breaks = seq(0,1,length.out = 11)) +
+    scale_fill_manual(values = c("lightgrey", "darkgrey")) +
+    guides(fill = guide_legend(title = "DNA content")) +
+    color_scale_conditions
+}
+
+## plots
+
+plot_G1_G2_percent_stacked(df_proportions, bars = condition, faceting = serum)
+
+plot_G1_G2_percent_stacked(df_proportions, bars = serum, faceting = condition)
+
+```
+
+## Stats
+
+```{r stats}
+
+# testing only G2 values (no sense in testing reciprocal as well)
+
+df_proportions_G2 <- df_proportions %>%
+  filter(DNA_content == "G2")
+
+# changing serum to factor
+
+df_proportions_G2$serum <- df_proportions_G2$serum %>% as.factor()
+
+# generating dfs with only CTL or IR for serum comparison
+
+df_proportions_G2_CTL <- df_proportions_G2 %>%
+  filter(condition == "CTL")
+
+df_proportions_G2_IR <- df_proportions_G2 %>%
+  filter(condition == "IR")
+
+# non parametric t tests
+
+
 
 ```
 
