@@ -319,6 +319,8 @@ boxplot_foldchange <- function(df, y, ylab, x = serum) {
                size = 3,
                shape = 21) +
     labs(y = ylab) +
+    scale_y_continuous(limits = c(0.7 , 2.5),
+                       breaks = seq(from = 1.0, to = 2.5, by = 0.5)) +
     scale_fill_manual(values = c("lightgrey", "darkgrey")) +
     guides(fill = guide_legend(title = "DNA content")) +
     color_scale_conditions
@@ -327,10 +329,10 @@ boxplot_foldchange <- function(df, y, ylab, x = serum) {
 # plot
 
 boxplot_foldchange(CTL_foldchange, y = fold_change, ylab = "G2 % Fold Change") +
-  stat_compare_means(label.y = 2.2, label.x = 1.5)
+  stat_compare_means(label.y = 2.5, label.x = 0.7)
 
 boxplot_foldchange(IR_foldchange, y = fold_change, ylab = "G2 % Fold Change") +
-  stat_compare_means(label.y = 2.35, label.x = 1.5)
+  stat_compare_means(label.y = 2.5, label.x = 0.7)
 
 # df with both CTL and IR 
 
@@ -338,7 +340,8 @@ foldchange <- bind_rows(CTL_foldchange, IR_foldchange) %>%
   filter(serum == "FS")
 
 boxplot_foldchange(foldchange, y = fold_change, ylab = "G2 % Fold Change", x = condition) +
-  stat_compare_means(label.y = 2.35, label.x = 0.7)
+  stat_compare_means(label.y = 2.5, label.x = 0.7)
 
 ```
+
 It appears the relative fold change are very similar (~2x reduction in % of G2 cells). However, there's still a statistically significant difference in the relative reduction between CTL and IR, indicating that the fold change between FS and SS across the 2 conditions (CTL and IR) is not perfectly maintained.
