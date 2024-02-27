@@ -1,433 +1,1471 @@
 ---
-title: "Population-level-analysis"
+title: "Population-Level-Analysis"
 author: "Francesco Neri"
 date: "`r Sys.Date()`"
 output: html_document
 ---
 
 ```{r setup, include=FALSE}
-knitr::opts_chunk$set(echo = FALSE)
 
-#libraries
+knitr::opts_chunk$set(echo = FALSE,
+                      include = FALSE,
+                      fig.align='center',
+                      out.width="100%",
+                      fig.width=7.5,
+                      fig.asp=0.618)
+
+# libraries
 library(tidyverse)
+library(patchwork)
 library(readxl)
 library(scales)
 library(RColorBrewer)
 
-# custom functions
-## source load_functions
-source("C:/Users/ffran/AppData/Local/R/functions/load_functions.R")
+library(functions) # custom functions
 
-## load functions needed
-function_names <- c("add_fold_change",
-                    "update_variable_values",
-                    "add_mean_sd")
-
-load_functions(function_names)
-
-```
-
-```{r loading data}
-# data
-df <- read_xlsx(path = "C:/Users/ffran/Dropbox/R/Wirtz-collaboration/2023-0913_Analysis of Buck images-v2_population-level.xlsx")
-
-str_replace_all_underscore <- function(string, pattern) {
-  str_replace_all(string, pattern, replacement = "_")
-}
-
-colnames(df) <- colnames(df) %>%
-  str_replace_all_underscore(pattern = "-") %>%
-  str_replace_all_underscore(pattern = " ") %>%
-  str_replace_all(pattern = "/", replacement = "VS")
-
-# adjust batch/experiment # and serum values
-df <- update_variable_values(df, "Batch", 5:7, 1:3) %>%
-  update_variable_values(., "Serum", "Serum starved", "Serum Starved")
-
-```
-
-```{r add fold change}
-
-# create vector containing the variables we want to calculate the fold change for
-all_var_names <- colnames(df)
-
-var_interval_start <- grep(all_var_names, pattern = "NintAll_c2_overall")
-var_interval_end <- grep(all_var_names, pattern = "CintAll_c4_overall")
-
-variables <- c("Narea_overall", "NASP_overall", "NSF_overall", all_var_names[var_interval_start:var_interval_end])
-
-# grouping arguments
-grouping <- c("Batch", "Plate", "Cell_line", "Legend", "Serum", "Channel2", "Channel3")
-
-# create df with additional fold change columns
-df_fc <- add_fold_change(data = df,
-                vars_to_normalize = variables,
-                grouping_arguments = grouping,
-                normalization_variable = "Legend",
-                normalization_value = "Mock"
-                )
-
-# add mean and sd values
-variables_fc <- paste0(variables, "_fc")
-
-df_fc <- add_mean_sd(data = df_fc,
-            vars = variables_fc,
-            grouping_arguments = grouping)
-
-```
-
-IR normalized based on Mock-IR staining
-
-```{r adjusting dfs for plots}
-
-# filter df_fc clean to have only IR wells stained with Abs
-ctl_stains <- c("Isotype CTL Ab", "no 1°Ab", "Isot CTL Ab high")
-
-df_fc_clean <- df_fc %>%
-  filter(Legend == "IR") %>%
-  filter(!(Channel2 %in% ctl_stains)) %>%
-  filter(!(Channel3 %in% ctl_stains))
-
-df_fc_clean$Batch <- df_fc_clean$Batch %>% as.factor() # needed for labeling in ggplot
-
-# separate IMR90 from HMVECL, p21 from yH2AX
-df_fc_clean_IMR90 <- df_fc_clean %>%
-  filter(Cell_line == "IMR90")
-
-df_fc_clean_IMR90_p21 <- df_fc_clean_IMR90 %>%
-  filter(Channel2 == "p21")
-
-df_fc_clean_IMR90_yH2AX <- df_fc_clean_IMR90 %>%
-  filter(Channel2 == "yH2AX")
-
-df_fc_clean_HMVECL <- df_fc_clean %>%
-  filter(Cell_line == "HMVECL")
-
-df_fc_clean_HMVECL_p21 <- df_fc_clean_HMVECL %>%
-  filter(Channel2 == "p21")
-
-df_fc_clean_HMVECL_yH2AX <- df_fc_clean_HMVECL %>%
-  filter(Channel2 == "yH2AX")
-
-```
-
-## Fold change plots
-
-### p21 & yH2AX plots
-
-```{r ggplot settings}
-
-# set ggplot theme
 theme_set(theme_bw())
 
-# set 2nd marker palette
-palette_all <- rev(RColorBrewer::brewer.pal(9, "Set1")) %>%
-  .[c(1:3,5)]
-
-palette_p21 <- c("#999999", "#F781BF", "#A65628")
-palette_yH2AX <- c("#999999", "#F781BF", "#FF7F00")
-
 ```
 
-```{r function 2D fold change plots}
-# ggplot 2D scatterplot
+```{r load data}
 
-plot_2D_fold_change <- function(data,
-                                faceting_Ch2 = FALSE,
-                                x,
-                                y,
-                                xlab = "Fold Change 1st Marker \n(p21/yH2AX)",
-                                ylab = "Fold Change 2nd Marker \n(LaminB1/HMGB1/p21/yH2AX") {
-  stopifnot(is.data.frame(data))
-  stopifnot(is_logical(faceting_Ch2))
-  stopifnot(is_character(c(x,y,xlab, ylab)))
-  
-  # title
-  title <- data$Cell_line %>%
-    unique()
-  
-  #palette
-  p21 <- if_else(any(unique(data$Channel3) %in% "p21"), TRUE, FALSE)
-  yH2AX <- if_else(any(unique(data$Channel3) %in% "yH2AX"), TRUE, FALSE)
-  
-  palette <- if ( p21 == TRUE & yH2AX == TRUE ) {palette_all}
-  else {
-    if (p21 == TRUE) {palette_p21} else {palette_yH2AX}
-  }
-  
-  # axis limits
-  max_x <- max(data[ , x])
-  max_y <- max(data[ , y])
-  
-  limits_x <- c(0, max_x * 1.1)
-  limits_y <- c(0, max_y * 1.1)
-  
-  # plot
+SABGal_EdU <- list(
+  "FN027.01" = read.csv(
+    here::here(
+      "inst","extdata","FN027.01","Analysis_Report_2024-02-07.csv"
+    )),
+  "FN027.02" = read.csv(
+    here::here(
+      "inst","extdata","FN027.02","Analysis_Report_2024-02-07.csv"
+    )),
+  "FN027.03" = read.csv(
+    here::here(
+      "inst","extdata","FN027.03_230126","Analysis_Report_2024-02-07.csv"
+    ))
+)
+
+ICC_Morph <- left_join(
+  read_xlsx( 
+    path = here::here(
+      "inst","extdata","2023_1116_Analysis of Buck's images-v4_Mean Intensity.xlsx"
+    )),
+  read_xlsx(
+    path = here::here(
+      "inst","extdata","2024_0116_Analysis of Buck's images-v4 - speckle detection.xlsx"
+    ))
+)
+
+```
+# SA-$\beta$-Gal & EdU
+
+```{r df_SABGal_EdU}
+
+# adjust FN27.01
+SABGal_EdU$FN027.01 <- SABGal_EdU$FN027.01 %>%
+  mutate(
+    Condition = str_replace_all(Condition, "_background", "")
+  )
+
+df_SABGal_EdU <- SABGal_EdU %>%
+  # add the df name as variable to each df
+  imap(
+    # .x indicates the list object
+    ~ .x %>%
+      mutate(
+        # .y indicates the object name
+        Dataset = .y,
+        # adjust Dataset labels
+        Dataset = str_replace_all(Dataset,
+                                  pattern = c("FN027.03" = "3", "FN027.02" = "2", "FN027.01" = "1"))
+      ) %>% 
+      # reorder cols
+      select(Dataset, everything())
+    ) %>%
+  # merge the two dfs
+  bind_rows() %>%
+  # remove background wells
+  filter(!str_detect(Condition, pattern = "_background")) %>%
+  mutate(
+    # create fct column that combines condition_serum to assign colors
+    Serum_Condition = paste0(Serum, " ", Condition),
+    Serum_Condition = factor(Serum_Condition, levels = c("SS CTL", "FS CTL", "SS IR", "FS IR")),
+    # turn Condition into a factor
+    Condition = factor(Condition, levels = c("CTL", "IR")),
+    # turn Dataset into a factor
+    Dataset = factor(Dataset),
+    # turn percentages into proportions
+    across(contains("percentage"), ~ . / 100)
+  ) %>%
+  # reorder cols
+  select(1:grep("Serum", colnames(.)), Serum_Condition, everything())
+
+df_SABGal_EdU_summary <- df_SABGal_EdU %>%
+  # calculate mean & SD
+  group_by(Dataset, plate, Condition, Serum, Serum_Condition, Cell.Type) %>%
+  summarise(
+    `mean_EdU_median` = mean(EdU_median),
+    `sd_EdU_median` = sd(EdU_median),
+    `mean_SABGal_median` = mean(SABGal_median),
+    `sd_SABGal_median` = sd(SABGal_median),
+  ) %>%
+  ungroup()
+
+df_SABGal_EdU_summary_all_datasets <- df_SABGal_EdU %>%
+  # calculate mean & SD
+  group_by(Condition, Serum, Serum_Condition, Cell.Type) %>%
+  summarise(
+    `mean_EdU_median` = mean(EdU_median),
+    `sd_EdU_median` = sd(EdU_median),
+    `mean_SABGal_median` = mean(SABGal_median),
+    `sd_SABGal_median` = sd(SABGal_median),
+  ) %>%
+  ungroup()
+
+df_SABGal_EdU_summary_split <- df_SABGal_EdU_summary %>%
+  split(.$Dataset)
+
+```
+## SABGal & EdU images
+
+```{r panel SABGal EdU grid, include=TRUE}
+
+plot_grid_SABGal_EdU <- function(data) {
   ggplot(data,
-         aes(
-          !!sym(x),
-          !!sym(y)
-          )) +
-    geom_hline(yintercept = 1,
-             linetype = "dashed",
-             color = "grey") +
-    geom_vline(xintercept = 1,
-             linetype = "dashed",
-             color = "grey") +
-    geom_point(
-      aes(shape = Batch,
-          fill = Channel3),
-      size = 3) +
-    {if (faceting_Ch2 == TRUE) facet_grid(Serum ~ Channel2)} +
-    {if (faceting_Ch2 == FALSE) facet_grid(Serum ~ .)} +
-    labs(title = title,
-         x = xlab,
-         y = ylab) +
-    scale_x_continuous(
-      limits = limits_x,
-      breaks = seq(1, (round(max_x))+2, by = 2)
-      ) +
-    scale_y_continuous(
-      limits = limits_y,
-      breaks = seq(1, (round(max_y))+2, by = 2)
-      ) +
-    scale_shape_manual(values = c(22:25)) +
-    scale_fill_manual(values = palette) +
-    guides(fill = guide_legend(title = "2nd Marker",
-                               override.aes=list(shape=21, # needed to fix a legend bug due to use of scale_shape_manual()
-                                                 size=4)))
+         aes(x = Serum,
+             y = Condition)) +
+    geom_tile(color = "black",
+              fill = "white") +
+    geom_text(label = "image",
+              size = 4) +
+    facet_grid(. ~ Cell.Type) +
+    labs(x = NULL,
+         y = NULL) +
+    theme_minimal()
 }
-```
 
-```{r p21 & yH2AX plots}
+grid_SABGal_EdU <- plot_grid_SABGal_EdU(df_SABGal_EdU_summary)
 
-plot_2D_fold_change(df_fc_clean_HMVECL, x = "NintAll_c2_overall_fc", y = "NintAll_c3_overall_fc", faceting_Ch2 = TRUE)
-plot_2D_fold_change(df_fc_clean_IMR90, x = "NintAll_c2_overall_fc", y = "NintAll_c3_overall_fc", faceting_Ch2 = TRUE)
+grid_SABGal_EdU_FS <- plot_grid_SABGal_EdU(df_SABGal_EdU_summary %>%
+                                             filter(Serum == "FS")) +
+  theme(axis.text.x = element_blank())
 
-```
-
-
-### p21 plots
-
-```{r p21 plots, fig.dim=c(4.5,5)}
-
-plot_2D_fold_change(df_fc_clean_HMVECL_p21,
-                    x = "NintAll_c2_overall_fc",
-                    y = "NintAll_c3_overall_fc",
-                    xlab = "Fold Change 1st Marker \n(p21)")
-plot_2D_fold_change(df_fc_clean_IMR90_p21,
-                    x = "NintAll_c2_overall_fc",
-                    y = "NintAll_c3_overall_fc",
-                    xlab = "Fold Change 1st Marker \n(p21)")
-
-```
-
-### yH2AX plots
-
-```{r yH2AX plots, fig.dim=c(4.5,5)}
-
-plot_2D_fold_change(df_fc_clean_HMVECL_yH2AX,
-                    x = "NintAll_c2_overall_fc",
-                    y = "NintAll_c3_overall_fc",
-                    xlab = "Fold Change 1st Marker \n(yH2AX)")
-plot_2D_fold_change(df_fc_clean_IMR90_yH2AX,
-                    x = "NintAll_c2_overall_fc",
-                    y = "NintAll_c3_overall_fc",
-                    xlab = "Fold Change 1st Marker \n(yH2AX)")
-
-```
-
-# Fold change plots with mean ± SD
-
-```{r summary dfs}
-
-# creating summary df with mean and sd for Channel2 and Channel3
-start_var <- grep("Narea_overall_fc_mean", colnames(df_fc_clean))
-end_var <- grep("NintAll_c3_overall_fc_sd", colnames(df_fc_clean))
-var_range <- c(start_var:end_var)
-
-grouping_with_mean_sd <- c(grouping, colnames(df_fc_clean)[var_range])
-
-df_summary <- df_fc_clean %>%
-  group_by(!!!syms(grouping_with_mean_sd)) %>%
-  summarise()
-
-# creating cell type and Channel2 specific dfs
-## IMR90
-df_summary_IMR90 <- df_summary %>%
-  filter(Cell_line == "IMR90")
-
-df_summary_IMR90_p21 <- df_summary_IMR90 %>%
-  filter(Channel2 == "p21")
-
-df_summary_IMR90_yH2AX <- df_summary_IMR90 %>%
-  filter(Channel2 == "yH2AX")
-
-## HMVECL
-df_summary_HMVECL <- df_summary %>%
-  filter(Cell_line == "HMVECL")
-
-df_summary_HMVECL_p21 <- df_summary_HMVECL %>%
-  filter(Channel2 == "p21")
-
-df_summary_HMVECL_yH2AX <- df_summary_HMVECL %>%
-  filter(Channel2 == "yH2AX")
+grid_SABGal_EdU_FS + labs(title = "FS only images")
 
 ```
 
 
-```{r 2D fold change plots mean sd}
-# ggplot 2D scatterplot with mean + SD
+## SABGal & EdU data
 
-plot_2D_fold_change_mean_sd <- function(data,
-                                faceting_Ch2 = FALSE,
-                                x, x_sd,
-                                y, y_sd,
-                                xlab = "Fold Change 1st Marker \n(p21/yH2AX)",
-                                ylab = "Fold Change 2nd Marker \n(LaminB1/HMGB1/p21/yH2AX",
-                                axis_breaks_start = 1,
-                                axis_breaks_spacing = 2) {
+```{r function plot SABGal_EdU}
+
+plot_SABGal_EdU_summary <- function(data) {
+  
   stopifnot(is.data.frame(data))
-  stopifnot(is_logical(faceting_Ch2))
-  stopifnot(is_character(c(x, y, xlab, ylab)))
   
-  #title
-  title <- data$Cell_line %>%
-    unique()
+  # palette
+  palette <- RColorBrewer::brewer.pal(12, "Paired") %>% .[c(1,2,5,6)]
   
-  #palette
-  p21 <- if_else(any(unique(data$Channel3) %in% "p21"), TRUE, FALSE)
-  yH2AX <- if_else(any(unique(data$Channel3) %in% "yH2AX"), TRUE, FALSE)
+  palette_greys <- c(`3` = "#000000", `2` = "#737373", `1` = "#CCCCCC")
   
-  palette <- if ( p21 == TRUE & yH2AX == TRUE ) {palette_all}
-  else {
-    if (p21 == TRUE) {palette_p21} else {palette_yH2AX}
-  }
   
-  # axis limits
-  max_x <- max(data[ , x]) + max(data[ , x_sd])
-  max_y <- max(data[ , y]) + max(data[ , y_sd])
+  ggplot(data,
+         aes(x = `mean_SABGal_median`,
+             y = `mean_EdU_median`,
+             fill = Serum_Condition)
+         ) +
+    # EdU error bars
+    geom_errorbar(aes(ymin = `mean_EdU_median` - `sd_EdU_median`,
+                      ymax = `mean_EdU_median` + `sd_EdU_median`)
+                  ) +
+    # SABGal error bars
+    geom_errorbar(aes(xmin = `mean_SABGal_median` - `sd_SABGal_median`,
+                      xmax = `mean_SABGal_median` + `sd_SABGal_median`),
+                  ) +
+    geom_point(
+      aes(shape = Cell.Type,
+          color = Dataset),
+      size = 1.5,
+      stroke = 1.2
+    ) +
+    facet_grid(Serum ~ Cell.Type) +
+    scale_fill_manual(values = palette) +
+    scale_color_manual(values = palette_greys) +
+    scale_shape_manual(values = c(22,24)) +
+    labs(x = expression("SA-" *beta* "-Gal Optical Density"),
+         y = "EdU Intensity (AU)") +
+    guides(shape = guide_legend(order = 1, override.aes = list(stroke=0.5,size=2),
+                                title = "Cell Type"),
+           fill = guide_legend(order = 2,
+                               title = "Condition",
+                               # needed to fix a legend bug due to use of scale_shape_manual()
+                               override.aes = list(shape=21,
+                                                   size=3,
+                                                   stroke=0.5)),
+           color = guide_legend(order = 3,
+                                # needed to fix a legend bug due to use of scale_shape_manual()
+                                override.aes = list(shape=21,
+                                                    size=2))
+           )
+}
+
+```
+
+```{r function plot SABGal_EdU all datasets}
+
+plot_SABGal_EdU_summary_all_datasets <- function(data) {
   
-  limits_x <- c(0, max_x * 1.05)
-  limits_y <- c(0, max_y * 1.05)
+  stopifnot(is.data.frame(data))
+  
+  # palette
+  palette <- RColorBrewer::brewer.pal(12, "Paired") %>% .[c(1,2,5,6)]
+  
+  palette_greys <- c(`3` = "#000000", `2` = "#737373", `1` = "#CCCCCC")
+  
+  
+  ggplot(data,
+         aes(x = `mean_SABGal_median`,
+             y = `mean_EdU_median`,
+             fill = Serum_Condition)
+         ) +
+    # EdU error bars
+    geom_errorbar(aes(ymin = `mean_EdU_median` - `sd_EdU_median`,
+                      ymax = `mean_EdU_median` + `sd_EdU_median`),
+                  ) +
+    # SABGal error bars
+    geom_errorbar(aes(xmin = `mean_SABGal_median` - `sd_SABGal_median`,
+                      xmax = `mean_SABGal_median` + `sd_SABGal_median`),
+                  ) +
+    geom_point(
+      aes(shape = Cell.Type),
+      size = 1.5
+    ) +
+    facet_grid(Serum ~ Cell.Type) +
+    ## for % plots
+    # scale_x_continuous(limits = c(0,1),
+    #                    labels = scales::percent) +
+    # scale_y_continuous(limits = c(0,1),
+    #                    labels = scales::percent) +
+    scale_fill_manual(values = palette) +
+    scale_color_manual(values = palette_greys) +
+    scale_shape_manual(values = c(22,24)) +
+    ## for shape = Cell.Type
+    # scale_shape_manual(values = c("HMVEC-L" = 21, "IMR-90" = 24)) +
+    labs(x = expression("SA-" *beta* "-Gal Optical Density"),
+         y = "EdU Intensity (AU)") +
+    guides(shape = guide_legend(order = 1, override.aes = list(stroke=0.5,size=2),
+                                title = "Cell Type"),
+           fill = guide_legend(order = 2,
+                               title = "Condition",
+                               # needed to fix a legend bug due to use of scale_shape_manual()
+                               override.aes = list(shape=21,
+                                                   size=3,
+                                                   stroke=0.5)),
+           color = guide_legend(order = 3,
+                                # needed to fix a legend bug due to use of scale_shape_manual()
+                                override.aes = list(shape=21,
+                                                    size=2))
+           )
+}
+
+```
+
+### Split datasets
+
+```{r plot SABGal & EdU split, include=TRUE}
+
+map(df_SABGal_EdU_summary_split,
+    plot_SABGal_EdU_summary)
+
+```
+
+### Datasets - mean ± SD
+
+Both FS & SS
+
+```{r plot SABGal & EdU, include=TRUE}
+
+# filtering: NOT 1
+SABGal_EdU_summary <- plot_SABGal_EdU_summary(df_SABGal_EdU_summary)
+SABGal_EdU_summary + labs(title = "Serum: FS & SS; Faceting: cell type x serum")
+
+## faceting: Cell type only
+SABGal_EdU_summary +
+  facet_grid(. ~ Cell.Type) +
+  labs(title = "Serum: FS & SS; Faceting: cell type")
+
+## faceting: Serum only
+SABGal_EdU_summary +
+  facet_grid(. ~ Serum) +
+  labs(title = "Serum: FS & SS; Faceting: serum")
+
+## faceting: none
+SABGal_EdU_summary +
+  facet_grid() +
+  labs(title = "Serum: FS & SS; Faceting: none")
+
+```
+
+```{r plot SABGal & EdU all datasets, include=TRUE}
+
+SABGal_EdU_summary_all_datasets <- plot_SABGal_EdU_summary_all_datasets(
+  df_SABGal_EdU_summary_all_datasets
+  )
+
+SABGal_EdU_summary_all_datasets +
+  labs(title = "Serum: FS & SS; Faceting: cell type x serum")
+
+## faceting: Cell type only
+SABGal_EdU_summary_all_datasets +
+  facet_grid(. ~ Cell.Type) +
+  labs(title = "Serum: FS & SS; Faceting: cell type")
+
+## faceting: Serum only
+SABGal_EdU_summary_all_datasets +
+  facet_grid(. ~ Serum) +
+  labs(title = "Serum: FS & SS; Faceting: serum")
+
+## faceting: none
+SABGal_EdU_summary_all_datasets +
+  facet_grid() +
+  labs(title = "Serum: FS & SS; Faceting: none")
+
+```
+
+
+Only FS
+
+```{r plot SABGal & EdU FS only, include=TRUE, message=FALSE}
+
+# filtering: FS only
+FS_only_summary <- plot_SABGal_EdU_summary(df_SABGal_EdU_summary %>%
+                             filter(Serum == "FS")
+                           ) +
+  # change fill palette
+  scale_fill_manual(values = RColorBrewer::brewer.pal(12, "Accent")) +
+  # remove Serum faceting
+  facet_grid(. ~ Cell.Type)
+  
+FS_only_summary +
+  labs(title = "Serum: FS; Faceting: cell type")
+
+## faceting: none
+FS_only_summary +
+  facet_grid() +
+  labs(title = "Serum: FS; Faceting: none")
+
+```
+
+```{r plot SABGal & EdU all datasets FS only, include=TRUE, message=FALSE}
+
+# filtering: FS only
+FS_only_summary_all_datasets <- plot_SABGal_EdU_summary_all_datasets(
+  df_SABGal_EdU_summary_all_datasets %>%
+    filter(Serum == "FS")
+  ) +
+  # change fill palette
+  scale_fill_manual(values = RColorBrewer::brewer.pal(12, "Accent")) +
+  # remove Serum faceting
+  facet_grid(. ~ Cell.Type)
+  
+FS_only_summary_all_datasets +
+  labs(title = "Serum: FS; Faceting: cell type")
+
+## faceting: none
+FS_only_summary_all_datasets +
+  facet_grid() +
+  labs(title = "Serum: FS; Faceting: none")
+
+```
+
+
+### Datasets - all data points
+
+```{r function plot SABGal_EdU all datapoints}
+
+plot_SABGal_EdU <- function(data) {
+  
+  stopifnot(is.data.frame(data))
+  
+  # palette
+  palette <- RColorBrewer::brewer.pal(12, "Paired") %>% .[c(1,2,5,6)]
+  
+  palette_greys <- c(`3` = "#000000", `2` = "#737373", `1` = "#CCCCCC")
+  
+  
+  ggplot(data,
+         aes(x = `SABGal_median`,
+             y = `EdU_median`,
+             fill = Serum_Condition)
+         ) +
+    geom_point(
+      aes(shape = Cell.Type,
+          color = Dataset),
+      size=1.5, alpha=1/1.2,
+      stroke = 1.2
+    ) +
+    facet_grid(Serum ~ Cell.Type) +
+    scale_fill_manual(values = palette) +
+    scale_color_manual(values = palette_greys) +
+    scale_shape_manual(values = c(22,24)) +
+    labs(x = expression("SA-" *beta* "-Gal Optical Density"),
+         y = "EdU Intensity (AU)") +
+    guides(shape = guide_legend(order = 1, override.aes = list(stroke=0.5,size=2),
+                                title = "Cell Type"),
+           fill = guide_legend(order = 2,
+                               title = "Condition",
+                               # needed to fix a legend bug due to use of scale_shape_manual()
+                               override.aes = list(shape=21,
+                                                   size=3,
+                                                   stroke=0.5)),
+           color = guide_legend(order = 3,
+                                # needed to fix a legend bug due to use of scale_shape_manual()
+                                override.aes = list(shape=21,
+                                                    size=2))
+           )
+}
+
+```
+
+Both FS & SS
+
+```{r plot SABGal & EdU all datapoints, include=TRUE}
+
+# filtering: NOT 1
+SABGal_EdU <- plot_SABGal_EdU(df_SABGal_EdU)
+SABGal_EdU + labs(title = "Serum: FS & SS; Faceting: cell type x serum")
+
+## faceting: Cell type only
+SABGal_EdU +
+  facet_grid(. ~ Cell.Type) +
+  labs(title = "Serum: FS & SS; Faceting: cell type")
+
+## faceting: Serum only
+SABGal_EdU +
+  facet_grid(. ~ Serum) +
+  labs(title = "Serum: FS & SS; Faceting: serum")
+
+## faceting: none
+SABGal_EdU + facet_grid() +
+  labs(title = "Serum: FS & SS; Faceting: none")
+
+```
+
+Only FS
+
+```{r plot SABGal & EdU FS only all datapoints, include=TRUE, message=FALSE}
+
+# filtering: FS only
+FS_only <- plot_SABGal_EdU(df_SABGal_EdU %>%
+                             filter(Serum == "FS")
+                           ) +
+  # change fill palette
+  scale_fill_manual(values = RColorBrewer::brewer.pal(12, "Accent")) +
+  # remove Serum faceting
+  facet_grid(. ~ Cell.Type)
+  
+FS_only +
+  labs(title = "Serum: FS; Faceting: cell type")
+
+## faceting: none
+FS_only +
+  facet_grid() +
+  labs(title = "Serum: FS; Faceting: none")
+
+```
+
+### Panel SA-$\beta$-Gal & EdU data
+
+```{r panel_SABGal_EdU_data, include=TRUE}
+
+summary_all_datasets <- FS_only_summary_all_datasets +
+  facet_grid() +
+  # adjust legend
+  ## labels Serum_Condition
+  scale_fill_manual(values = RColorBrewer::brewer.pal(8, "Accent"),
+                    labels = c(`FS CTL` = "CTL", `FS IR` = "IR"))
+
+summary <- FS_only_summary +
+  # adjust legend
+  ## labels Serum_Condition
+  scale_fill_manual(values = RColorBrewer::brewer.pal(8, "Accent"),
+                    labels = c(`FS CTL` = "CTL", `FS IR` = "IR"))
+
+all_datapoints <- FS_only +
+  # adjust legend
+  ## labels Serum_Condition
+  scale_fill_manual(values = RColorBrewer::brewer.pal(8, "Accent"),
+                    labels = c(`FS CTL` = "CTL", `FS IR` = "IR"))
+
+panel_SABGal_EdU_data <- list(
+  "summary_all_datasets" = summary_all_datasets,
+  "summary" = summary,
+  "all_datapoints" = all_datapoints
+  )
+
+panel_SABGal_EdU_data
+
+```
+
+
+# ICC & Morphology
+
+```{r df ICC Morphology}
+
+df_ICC_Morph <- ICC_Morph %>%
+  # adjust col names
+  rename_with(~ str_replace_all(., pattern = "-| ", replacement = "_")) %>%
+  rename_with(~ str_replace_all(., pattern = "s/", replacement = "")) %>%
+  rename(Condition = Legend, Cell.Type = Cell_line, Dataset = Batch) %>%
+  # adjust Dataset/experiment # and serum values
+  update_variable_values(variable = "Dataset",
+                         old_values = 5:7,
+                         new_values = 1:3) %>%
+  mutate(
+    Dataset = factor(Dataset),
+    Serum = str_replace_all(Serum, pattern = "Serum starved", replacement = "Serum Starved"),
+    Serum = str_replace_all(Serum, pattern = "Serum Starved", replacement = "SS"),
+    Serum = str_replace_all(Serum, pattern = "Full Serum", replacement = "FS"),
+    Condition = str_replace_all(Condition, pattern = "Mock", replacement = "CTL"),
+    Condition = factor(Condition, levels = c("IR", "CTL")),
+    Cell.Type = str_replace_all(Cell.Type, pattern = c("HMVECL" = "HMVEC-L",
+                                                       "IMR90" = "IMR-90"))
+  ) %>%
+  # reorder cols
+  select(Dataset, everything()) %>%
+  # remove rows with NA values (entire Plate IF1 HMVECL Dataset 5 from 11/15/23 raw data)
+  na.omit()
+
+# add fold change setup
+## create vector containing the variables we want to calculate the fold change for
+all_var_names <- colnames(df_ICC_Morph)
+
+var_interval_start <- grep(all_var_names, pattern = "NintAll_c1_overall_MEAN")
+var_interval_end <- grep(all_var_names, pattern = "NintAll_c4_overall_MEAN")
+
+variables <- c("Narea_overall", "NASP_overall", "NSF_overall",
+               all_var_names[var_interval_start:var_interval_end],
+               "average_speckle_count", "portion_of_cell_with_3+_speckle"
+               )
+
+## grouping arguments
+grouping <- c("Dataset", "Plate", "Cell.Type", "Condition", "Serum", "Channel2", "Channel3")
+
+df_ICC_Morph <- df_ICC_Morph %>%
+  # add fold change
+  add_fold_change(vars_to_normalize = variables,
+                  grouping_arguments = grouping,
+                  normalization_variable = "Condition",
+                  normalization_value = "CTL") %>%
+  # keep only yH2AX as 1st marker (because it'll be easier to plot it on its own axis)
+  filter(Channel2 == "yH2AX")
+
+df_ICC_summary <- df_ICC_Morph %>%
+  # calculate mean and sd
+  group_by(Dataset, Plate, Cell.Type, Condition, Serum, Channel2, Channel3) %>%
+  summarise(
+    across(c("Narea_overall", "NASP_overall", "NSF_overall", paste0(variables, "_fc")),
+           list(mean = ~ mean(.x),
+                sd = ~ sd(.x))
+           )
+  ) %>%
+  ungroup()
+
+df_ICC_summary_split <- df_ICC_summary %>%
+  # split df based on Dataset
+  split(.$Dataset)
+
+df_ICC_summary_all_datasets <- df_ICC_Morph %>%
+  # calculate mean and sd
+  group_by(Cell.Type, Condition, Serum, Channel2, Channel3) %>%
+  summarise(
+    across(c("Narea_overall", "NASP_overall", "NSF_overall", paste0(variables, "_fc")),
+           list(mean = ~ mean(.x),
+                sd = ~ sd(.x))
+           )
+  ) %>%
+  ungroup()
+
+```
+
+## ICC & Morphology images
+
+```{r plot grid ICC_Morph, include=TRUE}
+
+plot_grid_ICC_Morph <- function(data) {
+  ggplot(data,
+         aes(x = Serum,
+             y = Condition)) +
+    geom_tile(color = "black",
+              fill = "white") +
+    geom_text(label = "image",
+              size = 4) +
+    facet_grid(Cell.Type ~ Channel3) +
+    labs(x = NULL,
+         y = NULL) +
+    theme_minimal()
+}
+
+grid_ICC_Morph <- plot_grid_ICC_Morph(df_ICC_summary)
+
+grid_ICC_Morph_FS <- plot_grid_ICC_Morph(df_ICC_summary %>%
+                                             filter(Serum == "FS")) +
+  theme(axis.text.x = element_blank())
+
+grid_ICC_Morph_FS + labs(title = "FS only images")
+
+```
+
+## ICC data
+
+### mean ± SD
+
+```{r function plot 2D fold change}
+
+plot_2D_fc_summary <- function(data,
+                                x) {
+  
+  stopifnot(is.data.frame(data))
+  stopifnot(is_character(x))
+  
+  # RColorBrewer::brewer.pal(9, "Set3") %>% rev()
+  #"#D9D9D9" "#FCCDE5" "#B3DE69" "#FDB462" "#80B1D3" "#FB8072" "#BEBADA" "#FFFFB3" "#8DD3C7"
+  palette_2D_fc <-  c("#FFFFB3", "#FDB462", "#80B1D3")
+  palette_greys <- c(`3` = "#000000", `2` = "#737373", `1` = "#CCCCCC")
+  
+  pal_grey(0,1)(30)
   
   # plot
-  ggplot(data,
-         aes(!!sym(x),
-             !!sym(y)
-             )
+  ggplot(data %>%
+           filter(Condition == "IR"), # keep only IR fc values
+         aes(
+          x = !!sym(x),
+          y = NintAll_c3_overall_MEAN_fc_mean,
+          fill = Channel3,
+          shape = Cell.Type,
+          )
          ) +
     geom_hline(yintercept = 1,
-             linetype = "dashed",
-             color = "grey") +
+             linetype = "dotted",
+             color = "black") +
     geom_vline(xintercept = 1,
-             linetype = "dashed",
-             color = "grey") +
-    geom_errorbar(
-      aes(ymin = (!!sym(y) - !!sym(y_sd)),
-          ymax = (!!sym(y) + !!sym(y_sd)),
-          color = Channel3
-          ),
-      width = max_x/20) +
-    geom_errorbar(
-      aes(xmin = (!!sym(x) - !!sym(x_sd)),
-          xmax = (!!sym(x) + !!sym(x_sd)),
-          color = Channel3
-          ),
-      width = max_y/20) +
+             linetype = "dotted",
+             color = "black") +
+    geom_errorbar(aes(
+      ymin = NintAll_c3_overall_MEAN_fc_mean - NintAll_c3_overall_MEAN_fc_sd,
+      ymax = NintAll_c3_overall_MEAN_fc_mean + NintAll_c3_overall_MEAN_fc_sd
+      )) +
+    geom_errorbar(aes(
+      xmin = !!sym(x) - !!sym(str_replace(x, pattern = "_mean", replacement = "_sd")),
+      xmax = !!sym(x) + !!sym(str_replace(x, pattern = "_mean", replacement = "_sd"))
+      )) +
     geom_point(
-      aes(shape = Batch,
-          fill = Channel3),
-      size = 3) +
-    {if (faceting_Ch2 == TRUE) facet_grid(Serum ~ Channel2)} +
-    {if (faceting_Ch2 == FALSE) facet_grid(Serum ~ .)} +
-    labs(title = title,
-         x = xlab,
-         y = ylab) +
-    scale_x_continuous(
-      limits = limits_x,
-      breaks = seq(axis_breaks_start, (round(max_x))+2, by = axis_breaks_spacing)
-      ) +
-    scale_y_continuous(
-      limits = limits_y,
-      breaks = seq(axis_breaks_start, (round(max_y))+2, by = axis_breaks_spacing)
-      ) +
-    scale_shape_manual(values = c(22:25)) +
-    scale_fill_manual(values = palette) +
-    scale_color_manual(values = palette) +
-    guides(
-      color = "none", # to fix -> remove from legend
-      fill = guide_legend(title = "2nd Marker",
-                               override.aes=list(shape=21, # needed to fix a legend bug due to use of scale_shape_manual()
-                                                 size=4)))
+      aes(color = Dataset),
+      size = 1.5,
+      stroke = 1.2) +
+    facet_grid(Serum ~ Cell.Type) +
+    scale_fill_manual(values = palette_2D_fc) +
+    scale_color_manual(values = palette_greys) +
+    scale_shape_manual(values = c(22,24)) +
+    labs(
+      x = expression("Fold Change  " *gamma* "H2AX"),
+      y = expression("Fold Change 2"^"nd"~"Marker")
+    ) +
+    guides(shape = guide_legend(order = 1, override.aes = list(stroke=0.5,size=2),
+                                title = "Cell Type"),
+           fill = guide_legend(order = 2,
+                               title = "2"^"nd" ~ "Marker",
+                               override.aes = list(shape=21,
+                                                   size = 3,
+                                                   stroke = 0.5)),
+           color = guide_legend(order = 3,
+                                override.aes = list(shape=21,
+                                                    size=2))
+           )
 }
+
 ```
 
-```{r p21 & yH2AX mean sd plots}
+```{r plot 2D_fc_summary, include=TRUE}
 
-plot_2D_fold_change_mean_sd(df_summary_HMVECL,
-                            x = "NintAll_c2_overall_fc_mean", x_sd = "NintAll_c2_overall_fc_sd",
-                            y = "NintAll_c3_overall_fc_mean", y_sd = "NintAll_c3_overall_fc_sd",
-                            faceting_Ch2 = TRUE)
-plot_2D_fold_change_mean_sd(df_summary_IMR90,
-                            x = "NintAll_c2_overall_fc_mean", x_sd = "NintAll_c2_overall_fc_sd",
-                            y = "NintAll_c3_overall_fc_mean", y_sd = "NintAll_c3_overall_fc_sd",
-                            faceting_Ch2 = TRUE)
+`2D_fc_summary` <- plot_2D_fc_summary(df_ICC_summary, x = "average_speckle_count_fc_mean")
+
+`2D_fc_summary` + labs(title = "FS and SS, mean ± SD, w/ dataset distinction")
 
 ```
 
 
-### p21 plots
 
-```{r p21 mean sd plots, fig.dim=c(4.5,5)}
+```{r plot 2D_fc_summary FS only, include=TRUE}
 
-plot_2D_fold_change_mean_sd(df_summary_HMVECL_p21,
-                            x = "NintAll_c2_overall_fc_mean", x_sd = "NintAll_c2_overall_fc_sd",
-                            y = "NintAll_c3_overall_fc_mean", y_sd = "NintAll_c3_overall_fc_sd",
-                            xlab = "Fold Change 1st Marker \n(p21)")
-plot_2D_fold_change_mean_sd(df_summary_IMR90_p21,
-                            x = "NintAll_c2_overall_fc_mean", x_sd = "NintAll_c2_overall_fc_sd",
-                            y = "NintAll_c3_overall_fc_mean", y_sd = "NintAll_c3_overall_fc_sd",
-                            xlab = "Fold Change 1st Marker \n(p21)")
+`2D_fc_summary_FS` <- plot_2D_fc_summary(df_ICC_summary %>%
+                                           filter(Serum == "FS"),
+                                         x = "average_speckle_count_fc_mean")
 
-```
-
-### yH2AX plots
-
-```{r yH2AX mean sd plots, fig.dim=c(4.5,5)}
-
-plot_2D_fold_change_mean_sd(df_summary_HMVECL_yH2AX,
-                            x = "NintAll_c2_overall_fc_mean", x_sd = "NintAll_c2_overall_fc_sd",
-                            y = "NintAll_c3_overall_fc_mean", y_sd = "NintAll_c3_overall_fc_sd",
-                            xlab = "Fold Change 1st Marker \n(yH2AX)")
-plot_2D_fold_change_mean_sd(df_summary_IMR90_yH2AX,
-                            x = "NintAll_c2_overall_fc_mean", x_sd = "NintAll_c2_overall_fc_sd",
-                            y = "NintAll_c3_overall_fc_mean", y_sd = "NintAll_c3_overall_fc_sd",
-                            xlab = "Fold Change 1st Marker \n(yH2AX)")
-
-```
-
-```{r morphology plots}
-
-plot_2D_fold_change_mean_sd(df_summary_HMVECL,
-                            x = "Narea_overall_fc_mean", x_sd = "Narea_overall_fc_sd",
-                            y = "NSF_overall_fc_mean", y_sd = "NSF_overall_fc_sd",
-                            xlab = "Nuclear Area (px^2)",
-                            ylab = "NSF",
-                            axis_breaks_start = 0,
-                            axis_breaks_spacing = 0.5)
-plot_2D_fold_change_mean_sd(df_summary_HMVECL,
-                            x = "Narea_overall_fc_mean", x_sd = "Narea_overall_fc_sd",
-                            y = "NASP_overall_fc_mean", y_sd = "NASP_overall_fc_sd",
-                            xlab = "Nuclear Area (px^2)",
-                            ylab = "Nuclear ASP",
-                            faceting_Ch2 = TRUE)
+`2D_fc_summary_FS` + labs(title = "only FS, mean ± SD, w/ dataset distinction")
 
 ```
 
 
-```{r Notes}
-### NOTES ###
+```{r function 2D_fc_summary no dataset}
+
+plot_2D_fc_summary_no_dataset_label <- function(data,
+                                x) {
+  
+  stopifnot(is.data.frame(data))
+  stopifnot(is_character(x))
+  
+  # RColorBrewer::brewer.pal(9, "Set3") %>% rev()
+  #"#D9D9D9" "#FCCDE5" "#B3DE69" "#FDB462" "#80B1D3" "#FB8072" "#BEBADA" "#FFFFB3" "#8DD3C7"
+  palette_2D_fc <-  c("#FFFFB3", "#FDB462", "#80B1D3")
+  palette_greys <- c(`3` = "#000000", `2` = "#737373", `1` = "#CCCCCC")
+  
+  # plot
+  ggplot(data %>%
+           filter(Condition == "IR"), # keep only IR fc values
+         aes(
+          x = !!sym(x),
+          y = NintAll_c3_overall_MEAN_fc_mean,
+          fill = Channel3,
+          shape = Cell.Type
+          )
+         ) +
+    geom_hline(yintercept = 1,
+             linetype = "dotted",
+             color = "black") +
+    geom_vline(xintercept = 1,
+             linetype = "dotted",
+             color = "black") +
+    geom_errorbar(aes(
+      ymin = NintAll_c3_overall_MEAN_fc_mean - NintAll_c3_overall_MEAN_fc_sd,
+      ymax = NintAll_c3_overall_MEAN_fc_mean + NintAll_c3_overall_MEAN_fc_sd
+      )) +
+    geom_errorbar(aes(
+      xmin = !!sym(x) - !!sym(str_replace(x, pattern = "_mean", replacement = "_sd")),
+      xmax = !!sym(x) + !!sym(str_replace(x, pattern = "_mean", replacement = "_sd"))
+      )) +
+    geom_point(
+      size = 1.5) +
+    facet_grid(Serum ~ Cell.Type) +
+    scale_fill_manual(values = palette_2D_fc) +
+    scale_shape_manual(values = c(22,24)) +
+    labs(
+      x = expression("Fold Change  " *gamma* "H2AX"),
+      y = expression("Fold Change 2"^"nd"~"Marker")
+    ) +
+    guides(shape = guide_legend(order = 1, override.aes = list(stroke=0.5,size=2),
+                                title = "Cell Type"),
+           fill = guide_legend(order = 2,
+                               title = "2"^"nd" ~ "Marker",
+                               override.aes = list(shape=21,
+                                                   size = 3,
+                                                   stroke = 0.5)),
+           color = guide_legend(order = 3,
+                                override.aes = list(shape=21,
+                                                    size=2))
+           )
+}
+
 ```
 
+```{r plot 2D_fc_summary no dataset, include=TRUE}
+
+`2D_fc_summary_FS_no_dataset_label` <- plot_2D_fc_summary_no_dataset_label(df_ICC_summary %>%
+                                                             filter(Serum == "FS"),
+                                                           x = "average_speckle_count_fc_mean")
+
+`2D_fc_summary_FS_no_dataset_label` +
+  labs(title = "only FS, mean ± SD, w/ dataset distinction, w/o dataset label")
+
+```
+
+### mean ± SD - all datasets
+
+```{r function 2D fold change all datasets}
+
+plot_2D_fc_summary_all_datasets <- function(data,
+                                x) {
+  
+  stopifnot(is.data.frame(data))
+  stopifnot(is_character(x))
+  
+  # RColorBrewer::brewer.pal(9, "Set3") %>% rev()
+  #"#D9D9D9" "#FCCDE5" "#B3DE69" "#FDB462" "#80B1D3" "#FB8072" "#BEBADA" "#FFFFB3" "#8DD3C7"
+  palette_2D_fc <-  c("#FFFFB3", "#FDB462", "#80B1D3")
+  palette_greys <- c(`3` = "#000000", `2` = "#737373", `1` = "#CCCCCC")
+  
+  # plot
+  ggplot(data %>%
+           filter(Condition == "IR"), # keep only IR fc values
+         aes(
+          x = !!sym(x),
+          y = NintAll_c3_overall_MEAN_fc_mean,
+          fill = Channel3,
+          shape = Cell.Type
+          )
+         ) +
+    geom_hline(yintercept = 1,
+             linetype = "dotted",
+             color = "black") +
+    geom_vline(xintercept = 1,
+             linetype = "dotted",
+             color = "black") +
+    geom_errorbar(aes(
+      ymin = NintAll_c3_overall_MEAN_fc_mean - NintAll_c3_overall_MEAN_fc_sd,
+      ymax = NintAll_c3_overall_MEAN_fc_mean + NintAll_c3_overall_MEAN_fc_sd
+      )) +
+    geom_errorbar(aes(
+      xmin = !!sym(x) - !!sym(str_replace(x, pattern = "_mean", replacement = "_sd")),
+      xmax = !!sym(x) + !!sym(str_replace(x, pattern = "_mean", replacement = "_sd"))
+      )) +
+    geom_point(
+      size = 1.5) +
+    facet_grid(Serum ~ Cell.Type) +
+    scale_fill_manual(values = palette_2D_fc) +
+    scale_shape_manual(values = c(22,24)) +
+    labs(
+      x = expression("Fold Change  " *gamma* "H2AX"),
+      y = expression("Fold Change 2"^"nd"~"Marker")
+    ) +
+    guides(shape = guide_legend(order = 1, override.aes = list(stroke=0.5,size=2),
+                                title = "Cell Type"),
+           fill = guide_legend(order = 2,
+                               title = "2"^"nd" ~ "Marker",
+                               override.aes = list(shape=21,
+                                                   size = 3,
+                                                   stroke = 0.5)),
+           color = guide_legend(order = 3,
+                                override.aes = list(shape=21,
+                                                    size=2))
+           )
+}
+
+```
+
+```{r plot 2D fold change all datasets}
+
+`2D_fc_summary_all_datasets` <- plot_2D_fc_summary_all_datasets(
+  df_ICC_summary_all_datasets,
+  x = "average_speckle_count_fc_mean"
+)
+
+`2D_fc_summary_all_datasets`
+
+```
+
+```{r plot 2D fold change all datasets FS}
+
+`2D_fc_summary_all_datasets_FS` <- plot_2D_fc_summary_all_datasets(
+  df_ICC_summary_all_datasets %>%
+    filter(Serum == "FS"),
+  x = "average_speckle_count_fc_mean"
+)
+
+`2D_fc_summary_all_datasets_FS`
+
+```
+
+### all datapoints
+
+```{r function 2D fold change all datapoints}
+
+plot_2D_fc <- function(data,
+                                x) {
+  
+  stopifnot(is.data.frame(data))
+  stopifnot(is_character(x))
+  
+  # RColorBrewer::brewer.pal(9, "Set3") %>% rev()
+  #"#D9D9D9" "#FCCDE5" "#B3DE69" "#FDB462" "#80B1D3" "#FB8072" "#BEBADA" "#FFFFB3" "#8DD3C7"
+  palette_2D_fc <-  c("#FFFFB3", "#FDB462", "#80B1D3")
+  palette_greys <- c(`3` = "#000000", `2` = "#737373", `1` = "#CCCCCC")
+  
+  # plot
+  ggplot(data %>%
+           filter(Condition == "IR"), # keep only IR fc values
+         aes(
+          x = !!sym(x),
+          y = NintAll_c3_overall_MEAN_fc,
+          fill = Channel3,
+          shape = Cell.Type
+          )
+         ) +
+    geom_hline(yintercept = 1,
+             linetype = "dotted",
+             color = "black") +
+    geom_vline(xintercept = 1,
+             linetype = "dotted",
+             color = "black") +
+    geom_point(
+      aes(color = Dataset),
+      size = 1.5, alpha=1/1.2,
+      stroke = 1.2
+      ) +
+    facet_grid(Serum ~ Cell.Type) +
+    scale_fill_manual(values = palette_2D_fc) +
+    scale_color_manual(values = palette_greys) +
+    scale_shape_manual(values = c(22,24)) +
+    labs(
+      x = expression("Fold Change  " *gamma* "H2AX"),
+      y = expression("Fold Change 2"^"nd"~"Marker")
+    ) +
+    guides(shape = guide_legend(order = 1, override.aes = list(stroke=0.5,size=2),
+                                title = "Cell Type"),
+           fill = guide_legend(order = 2,
+                               title = "2"^"nd" ~ "Marker",
+                               override.aes = list(shape=21,
+                                                   size = 3,
+                                                   stroke = 0.5)),
+           color = guide_legend(order = 3,
+                                override.aes = list(shape=21,
+                                                    size=2))
+           )
+}
+
+```
+
+```{r plot 2D fold change all datapoints FS}
+
+
+`2D_fc_FS` <- plot_2D_fc(df_ICC_Morph %>%
+                                          filter(Serum == "FS"),
+                                        x = "average_speckle_count_fc")
+
+`2D_fc_FS` + labs(title = "All datapoints, w/ dataset distinction")
+
+
+```
+
+
+```{r function 2D fold change all datapoints no datasets}
+
+plot_2D_fc_no_datasets <- function(data,
+                                x) {
+  
+  stopifnot(is.data.frame(data))
+  stopifnot(is_character(x))
+  
+  # RColorBrewer::brewer.pal(9, "Set3") %>% rev()
+  #"#D9D9D9" "#FCCDE5" "#B3DE69" "#FDB462" "#80B1D3" "#FB8072" "#BEBADA" "#FFFFB3" "#8DD3C7"
+  palette_2D_fc <-  c("#FFFFB3", "#FDB462", "#80B1D3")
+  palette_greys <- c(`3` = "#000000", `2` = "#737373", `1` = "#CCCCCC")
+  
+  # plot
+  ggplot(data %>%
+           filter(Condition == "IR"), # keep only IR fc values
+         aes(
+          x = !!sym(x),
+          y = NintAll_c3_overall_MEAN_fc,
+          fill = Channel3,
+          shape = Cell.Type
+          )
+         ) +
+    geom_hline(yintercept = 1,
+             linetype = "dotted",
+             color = "black") +
+    geom_vline(xintercept = 1,
+             linetype = "dotted",
+             color = "black") +
+    geom_point(
+      size = 1.5) +
+    facet_grid(Serum ~ Cell.Type) +
+    scale_fill_manual(values = palette_2D_fc) +
+    scale_shape_manual(values = c(22,24)) +
+    labs(
+      x = expression("Fold Change  " *gamma* "H2AX"),
+      y = expression("Fold Change 2"^"nd"~"Marker")
+    ) +
+    guides(shape = guide_legend(order = 1, override.aes = list(stroke=0.5,size=2),
+                                title = "Cell Type"),
+           fill = guide_legend(order = 2,
+                               title = "2"^"nd" ~ "Marker",
+                               override.aes = list(shape=21,
+                                                   size = 3,
+                                                   stroke = 0.5))
+           )
+}
+
+```
+
+```{r plot 2D fold change all datapoints no datasets}
+
+
+`2D_fc_no_datasets` <- plot_2D_fc_no_datasets(df_ICC_Morph %>%
+                                          filter(Serum == "FS"),
+                                        x = "average_speckle_count_fc")
+
+`2D_fc_no_datasets`
+
+
+```
+
+### Panel ICC data
+
+```{r Panel ICC data}
+
+all_datapoints_all_datasets <- `2D_fc_summary_all_datasets_FS` +
+  # remove FS facet label
+  facet_grid(. ~ Cell.Type)
+
+all_datapoints_all_datasets_nofacets <- all_datapoints_all_datasets +
+  # remove Cell.Type faceting
+  facet_grid()
+
+summary_all_datasets <- `2D_fc_summary_FS_no_dataset_label` +
+  # remove FS facet label
+  facet_grid(. ~ Cell.Type)
+
+summary_all_datasets_nofacets <- summary_all_datasets +
+  # remove Cell.Type faceting
+  facet_grid()
+
+summary <- `2D_fc_summary_FS` +
+  # remove FS facet label
+  facet_grid(. ~ Cell.Type)
+
+summary_nofacets <- summary +
+  # remove Cell.Type faceting
+  facet_grid()
+
+all_datapoints <- `2D_fc_FS` +
+  # remove FS facet label
+  facet_grid(. ~ Cell.Type)
+
+all_datapoints_nofacets <- all_datapoints +
+  # remove Cell.Type faceting
+  facet_grid()
+
+
+panel_ICC_data <- list(
+  "all_datapoints_all_datasets" = all_datapoints_all_datasets,
+  "all_datapoints_all_datasets_nofacets" = all_datapoints_all_datasets_nofacets,
+  "summary_all_datasets" = summary_all_datasets,
+  "summary_all_datasets_nofacets" = summary_all_datasets_nofacets,
+  "summary" = summary,
+  "summary_nofacets" = summary_nofacets,
+  "all_datapoints" = all_datapoints,
+  "all_datapoints_nofacets" = all_datapoints_nofacets
+)
+
+```
+
+
+## Morphology data
+
+```{r df Morph}
+
+df_Morph <- df_ICC_Morph %>%
+  select(which(!stringr::str_detect(names(.), "Nint|speckle"))) %>%
+  mutate(
+    # create fct column that combines condition_serum to assign colors
+    Serum_Condition = paste0(Serum, " ", Condition),
+    Serum_Condition = factor(Serum_Condition),
+    Condition = factor(Condition, levels = c("CTL", "IR"))
+  ) %>%
+  select(Dataset, Plate, Cell.Type, Serum, Condition, Serum_Condition, everything())
+
+df_Morph_summary <- df_Morph %>%
+  # calculate mean and sd
+  group_by(Dataset, Plate, Cell.Type, Condition, Serum, Channel2) %>%
+  summarise(
+    across(c("Narea_overall", "NASP_overall", "NSF_overall"),
+           list(mean = ~ mean(.x),
+                sd = ~ sd(.x))
+           )
+  ) %>%
+  ungroup()
+
+df_Morph_summary_alldatasets <- df_Morph %>%
+  # calculate mean and sd
+  group_by(Cell.Type, Condition, Serum, Channel2) %>%
+  summarise(
+    across(c("Narea_overall", "NASP_overall", "NSF_overall"),
+           list(mean = ~ mean(.x),
+                sd = ~ sd(.x))
+           )
+  ) %>%
+  ungroup()
+
+df_Morph_summary_split <- df_Morph %>%
+  # split df based on Dataset
+  split(.$Dataset)
+
+list_df_Morph <- list(
+  "alldp" = df_Morph,
+  "summary" = df_Morph_summary,
+  "summary_allds" = df_Morph_summary_alldatasets
+)
+
+```
+
+### FS only
+
+```{r df Morph FS}
+
+list_df_Morph_FS <- map(
+  list_df_Morph,
+  ~ filter(.x, Serum == "FS")
+)
+
+```
+
+
+```{r function plot Morph}
+
+plot_Morph <- function(data, y, ylab) {
+  
+  palette <- RColorBrewer::brewer.pal(8, "Accent")
+  palette_greys <- c(`3` = "#000000", `2` = "#737373", `1` = "#CCCCCC")
+  
+  ggplot(data,
+         aes(y = !!sym(y),
+             x = Condition)
+         ) +
+    geom_jitter(height=0, size=2, stroke=1.2, alpha=1/1.2,
+               aes(
+                 shape = Cell.Type,
+                 fill = Condition,
+                 color = Dataset)
+               ) +
+    facet_grid(. ~ Cell.Type) +
+    labs(y = ylab) +
+    scale_shape_manual(values = c(22,24)) +
+    scale_fill_manual(values = palette) +
+    scale_color_manual(values = palette_greys) +
+    guides(shape = guide_legend(order=1,
+                                override.aes = list(stroke=0.5, size=2)),
+           fill = guide_legend(order=2,
+                                override.aes = list(shape=21, stroke=0.5, size=3)),
+           color = guide_legend(order=3,
+                                override.aes = list(shape=21, size=2))
+           )
+}
+
+```
+
+```{r function plot Morph summary}
+
+plot_Morph_summary <- function(data, y, ylab) {
+  
+  
+  palette <- RColorBrewer::brewer.pal(8, "Accent")
+  palette_greys <- c(`3` = "#000000", `2` = "#737373", `1` = "#CCCCCC")
+  
+  ggplot(data,
+         aes(y = !!sym(y),
+             x = Condition)
+         ) +
+    geom_errorbar(
+      width=0.2, position=position_dodge(width = 0.5),
+      aes(ymin = !!sym(y) - !!sym(str_replace_all(y, pattern="_mean", replacement="_sd")),
+          ymax = !!sym(y) + !!sym(str_replace_all(y, pattern="_mean", replacement="_sd")),
+          color = Dataset
+      )) +
+    geom_point(size=2, stroke=1.2, position=position_dodge(width = 0.5),
+               aes(
+                 shape = Cell.Type,
+                 fill = Condition,
+                 color = Dataset)
+               ) +
+    facet_grid(. ~ Cell.Type) +
+    labs(y = ylab) +
+    scale_shape_manual(values = c(22,24)) +
+    scale_fill_manual(values = palette) +
+    scale_color_manual(values = palette_greys) +
+    guides(shape = guide_legend(order=1,
+                                override.aes = list(stroke=0.5, size=2)),
+           fill = guide_legend(order=2,
+                                override.aes = list(shape=21, stroke=0.5, size=3)),
+           color = guide_legend(order=3,
+                                override.aes = list(shape=21, size=2))
+           )
+}
+
+```
+
+```{r function plot Morph summary all datasets}
+
+plot_Morph_summary_allds <- function(data, y, ylab) {
+  
+  
+  palette <- RColorBrewer::brewer.pal(8, "Accent")
+  palette_greys <- c(`3` = "#000000", `2` = "#737373", `1` = "#CCCCCC")
+  
+  ggplot(data,
+         aes(y = !!sym(y),
+             x = Condition,
+             shape = Cell.Type)
+         ) +
+    geom_errorbar(
+      width=0.2, position=position_dodge(width = 0.5),
+      aes(ymin = !!sym(y) - !!sym(str_replace_all(y, pattern="_mean", replacement="_sd")),
+          ymax = !!sym(y) + !!sym(str_replace_all(y, pattern="_mean", replacement="_sd"))
+      )) +
+    geom_point(size=2, stroke=1.2, position=position_dodge(width = 0.5),
+               aes(
+                 shape = Cell.Type,
+                 fill = Condition)
+               ) +
+    labs(y = ylab) +
+    scale_shape_manual(values = c(22,24)) +
+    scale_fill_manual(values = palette) +
+    scale_color_manual(values = palette_greys) +
+    guides(shape = guide_legend(order=1,
+                                override.aes = list(stroke=0.5, size=2)),
+           fill = guide_legend(order=2,
+                                override.aes = list(shape=21, stroke=0.5, size=3)),
+           color = guide_legend(order=3,
+                                override.aes = list(shape=21, size=2))
+           )
+}
+
+```
+
+```{r plot Morph alldp}
+
+# create mapping arguments
+map_arg <- list(y = c("Narea_overall", "NASP_overall", "NSF_overall"),
+                ylab = c("Nuclear Area (px^2)", "Nuclear Aspect Ratio", "Nuclear Shape Factor")
+                )
+# generate plots
+Morph_alldp <- pmap(map_arg, plot_Morph, data = list_df_Morph_FS$alldp)
+
+# name plots
+names(Morph_alldp) <- c("Area", "ASP", "SF")
+
+Morph_alldp
+
+```
+
+```{r plot Morph summary}
+
+# create mapping arguments
+map_arg_summary <- map_arg
+map_arg_summary$y <- paste0(map_arg_summary$y, "_mean")
+
+# generate plots
+Morph_summary <- pmap(map_arg_summary, plot_Morph_summary, data = list_df_Morph_FS$summary)
+
+# name plots
+names(Morph_summary) <- c("Area", "ASP", "SF")
+
+Morph_summary
+
+```
+
+```{r plot Morph summary allds}
+
+# generate plots
+Morph_summary_allds <- pmap(map_arg_summary,
+                            plot_Morph_summary_allds,
+                            data = list_df_Morph_FS$summary_allds)
+
+# name plots
+names(Morph_summary_allds) <- c("Area", "ASP", "SF")
+
+Morph_summary_allds
+
+```
+
+
+# Fig 1
+
+```{r Fig 1 data panels: SABGal_EdU ICC, fig.asp=1.33, include=TRUE}
+
+layout1 <- "
+AD
+BE
+CF
+GG
+GG
+"
+layout2 <- "
+AD
+BE
+CF
+GG
+GG
+"
+theme_Fig1 <- theme(axis.title = element_text(size = 10),
+        axis.text = element_text(size = 8),
+        legend.title = element_text(size = 10),
+        legend.text = element_text(size = 8),
+        legend.key.size = unit(0.35, "cm"),
+        legend.spacing.y = unit(0.1, "cm"),
+        legend.spacing.x = unit(0.1, "cm"),
+        strip.text = element_text(size = 8)
+        )
+
+Figure1_data_panels <-
+  panel_SABGal_EdU_data$summary_all_datasets + labs(title = "SABGal & EdU plots") +
+  panel_SABGal_EdU_data$summary +
+  panel_SABGal_EdU_data$all_datapoints +
+  panel_ICC_data$all_datapoints_all_datasets_nofacets + labs(title = "ICC plots") +
+  panel_ICC_data$summary +
+  panel_ICC_data$all_datapoints +
+  ggplot() + theme_void() +
+  plot_layout(design = layout1) &
+  theme_Fig1
+
+Figure1_data_panels
+
+```
+
+```{r Worfklow, eval=FALSE}
+
+Fig1_workflow <- magick::image_read("Fig1_workflow.png")
+print(Fig1_workflow)
+
+# this create img with very poor quality
+Workflow <- ggplot() + 
+  annotation_custom(grob = grid::rasterGrob(
+    Fig1_workflow,
+    width = unit(7.2, "in"),
+    height = unit(1.5, "in")
+    ),
+    xmin = -Inf, xmax = Inf, ymin = -Inf, ymax = Inf) +
+  theme_void()
+
+# this doesn't work
+Workflow <- ggplot() +
+  annotation_custom(
+    magick::image_raster(Fig1_workflow), 
+    xmin = -Inf, xmax = Inf, ymin = -Inf, ymax = Inf
+  ) +
+  theme_void()
+
+# Workflow
+
+```
+
+
+```{r Fig1, include=TRUE, fig.asp=1.33}
+
+layout <- "
+AAAAAAAAAAAA
+BBBBBBBCCCCC
+DDDDDDDEEEEE
+DDDDDDDEEEEE
+FFFFFFFFFFFF
+"
+layout_summary_allds <- "
+AAAAAAAAAAAA
+BBBBBBBBCCCC
+DDDDDDDDEEEE
+DDDDDDDDEEEE
+FFFFFFFFFFFF
+"
+theme_morph <- theme(axis.title.x = element_blank())
+theme_Fig1 <- theme(axis.title = element_text(size = 10),
+        axis.text = element_text(size = 8),
+        legend.title = element_text(size = 10),
+        legend.text = element_text(size = 8),
+        legend.key.size = unit(0.35, "cm"),
+        legend.spacing.y = unit(0.1, "cm"),
+        legend.spacing.x = unit(0.1, "cm"),
+        strip.text = element_text(size = 8)
+        )
+
+Figure1_summary_allds <- ggplot()+theme_void() +
+  grid_SABGal_EdU_FS +
+  panel_SABGal_EdU_data$summary_all_datasets +
+  grid_ICC_Morph_FS +
+  panel_ICC_data$all_datapoints_all_datasets_nofacets +
+  (Morph_summary_allds$Area + theme_morph +
+     Morph_summary_allds$ASP + theme_morph +
+     Morph_summary_allds$SF + theme_morph +
+     plot_layout(guides = "collect")) +
+  plot_layout(design = layout_summary_allds) +
+  plot_annotation(tag_levels = "a") &
+  theme_Fig1
+
+Figure1_summary <- ggplot()+theme_void() +
+  grid_SABGal_EdU_FS +
+  panel_SABGal_EdU_data$summary +
+  grid_ICC_Morph_FS +
+  panel_ICC_data$summary +
+  (Morph_summary$Area + theme_morph +
+     Morph_summary$ASP + theme_morph +
+     Morph_summary$SF + theme_morph +
+     plot_layout(guides = "collect")
+    ) +
+  plot_layout(design = layout) +
+  plot_annotation(tag_levels = "a") &
+  theme_Fig1
+
+Figure1_alldp <- ggplot()+theme_void() +
+  grid_SABGal_EdU_FS +
+  panel_SABGal_EdU_data$all_datapoints +
+  grid_ICC_Morph_FS +
+  panel_ICC_data$all_datapoints +
+  (Morph_alldp$Area + theme_morph +
+     Morph_alldp$ASP + theme_morph +
+     Morph_alldp$SF + theme_morph +
+     plot_layout(guides = "collect")
+    ) +
+  plot_layout(design = layout) +
+  plot_annotation(tag_levels = "a") &
+  theme_Fig1
+
+Figure1 <- list(
+  "Figure1_summary_allds" = Figure1_summary_allds,
+  "Figure1_summary" = Figure1_summary,
+  "Figure1_alldp" = Figure1_alldp
+  
+)
+
+Figure1
+
+```
+
+**Fig. 1 Senescence Validation and Population-Level Analysis**. **a**) Workflow for high-content image analysis of senescent cells. Primary human lung HMVEC-L endothelial cells and IMM-90 fibroblasts were mock treated (CTL) or induced to senescence using ionizing radiation (SEN). For both cell types, microplates were co-stained for senescence-associated markers (SA-B-Gal and EdU, or $\gamma$H2AX and LaminB1, HMBG1, or p21.  **b**) Representative images of primary human lung HMVEC-L endothelial cells and IMR-90 fibroblasts induced to senescence via ionizing radiation (IR) and mock-treated non-senescent controls (CTL). Cells were either cultured always in full serum (FS) or cultured in full serum until three days before sample collection and then switched to serum-starved conditions (SS). Samples were stained for the senescence-associated markers SA-$\beta$-Gal and EdU. **c**) Quantification of (a), showing percentages of SA-$\beta$-Gal- and EdU-positive cells per well (mean ± SD, n = 9). **d**) Representative ICC images of HMVEC-L and IMR-90 stained for $\gamma$H2AX in combination with other senescence-associated markers: HMGB1, Lamin B1, or p21.**e**) Quantification of (c), showing the relative changes in senescence markers expression between IR and CTL cells (mean fold change ± SD, n = 4). **f-h**) Quantification of nuclear morphological features: nuclear area (e), aspect ratio (ASP, f), and shape factor (SF) (mean ± SD, n = 12).
+
+```{r save Fig1, eval=FALSE}
+
+# pdf
+save_pdf <- function(figure, name) {
+  
+  pdf(paste0("Population-Analysis_",name,"_", Sys.Date(), ".pdf"),
+    width = 7.5,
+    height = 10,
+    family = "sans",
+    compress = F)
+
+  print(figure)
+  
+  dev.off()
+  
+}
+
+pmap(list(Figure1,
+          c("summary_allds", "summary", "alldp")
+          ),
+    save_pdf)
+
+# png
+save_png <- function(figure, name) {
+  png(paste0("Population-Analysis_",name,"_", Sys.Date(), ".png"),
+    width = 7.5,
+    height = 10,
+    units = "in",
+    family = "sans",
+    bg = "transparent", # doesn't work, bg is actually white
+    res = 600)
+
+  print(figure)
+  
+  dev.off()
+}
+
+pmap(list("figure" = Figure1,
+          "name" = c("summary_allds", "summary", "alldp")
+          ),
+    save_png)
+
+```
+
+```{r Notes, eval=FALSE}
+
+rmarkdown::render()
+
+```
 
