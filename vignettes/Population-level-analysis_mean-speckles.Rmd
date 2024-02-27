@@ -1,0 +1,388 @@
+---
+title: "Population-level-analysis"
+author: "Francesco Neri"
+date: "`r Sys.Date()`"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = FALSE,
+                      include = FALSE,
+                      fig.align='center',
+                      out.width="100%",
+                      fig.width=8,
+                      fig.asp=0.618)
+
+# libraries
+library(tidyverse)
+library(readxl)
+library(scales)
+library(RColorBrewer)
+
+library(functions) # custom functions
+
+```
+
+```{r loading data}
+
+# data
+## mean intensity
+df <- read_xlsx(path = "C:/Users/ffran/Dropbox/R/Wirtz-collaboration/Analysis of Buck's images-v4_Mean Intensity.xlsx")
+
+## speckle intensity/counts
+df_speckle <- read_xlsx(path = "C:/Users/ffran/Dropbox/R/Wirtz-collaboration/Analysis of Buck's images-v4 - speckle detection.xlsx")
+
+df <- left_join(df, df_speckle)
+
+# adjust col names
+colnames(df) <- colnames(df) %>%
+  str_replace_all(pattern = "-| ", replacement = "_") %>%
+  str_replace_all("s/", "")
+
+# adjust batch/experiment # and serum values
+df <- df %>%
+  update_variable_values(variable = "Batch",
+                         old_values = 5:7,
+                         new_values = 1:3) %>%
+  update_variable_values("Serum",
+                         "Serum starved",
+                         "Serum Starved") %>%
+  update_variable_values("Cell_line",
+                         c("HMVECL", "IMR90"),
+                         c("HMVEC-L", "IMR-90"))
+  
+# remove rows with NA values (entire Plate IF1 HMVECL Batch 5 from 11/15/23 raw data)
+df <- df %>% na.omit()
+
+```
+
+```{r add fold change}
+
+# create vector containing the variables we want to calculate the fold change for
+all_var_names <- colnames(df)
+
+var_interval_start <- grep(all_var_names, pattern = "NintAll_c1_overall_MEAN")
+var_interval_end <- grep(all_var_names, pattern = "NintAll_c4_overall_MEAN")
+
+variables <- c("Narea_overall", "NASP_overall", "NSF_overall",
+               all_var_names[var_interval_start:var_interval_end],
+               "average_speckle_count", "average_speckle_intensity",
+               "portion_of_cell_with_2+_speckle", "portion_of_cell_with_3+_speckle"
+               )
+
+# grouping arguments
+grouping <- c("Batch", "Plate", "Cell_line", "Legend", "Serum", "Channel2", "Channel3")
+
+# create df with additional fold change columns
+df_fc <- add_fold_change(data = df,
+                vars_to_normalize = variables,
+                grouping_arguments = grouping,
+                normalization_variable = "Legend",
+                normalization_value = "Mock"
+                )
+
+# add mean and sd values
+variables_fc <- paste0(variables, "_fc")
+
+df_fc <- add_mean_sd(data = df_fc,
+            vars = variables_fc,
+            grouping_arguments = grouping)
+
+```
+
+```{r adjusting dfs for plots}
+# turn Batch into a factor (needed for faceting with ggplot)
+df_fc$Batch <- df_fc$Batch %>% as.factor()
+
+# create empty list to contain and name dfs
+data_list <- vector("list", 0)
+
+# filter df_fc clean to have only IR wells with yH2AX as 1st senescence marker (Channel2)
+df_fc_IR_yH2AX <- df_fc %>%
+  filter(Legend == "IR",
+         Channel2 == "yH2AX")
+
+data_list$df_fc_IR_yH2AX <- df_fc_IR_yH2AX
+
+```
+
+# ICC
+
+## Fold change plots
+
+(normalization: IR/Mock-IR)
+
+```{r ggplot settings}
+
+# set ggplot theme
+theme_set(theme_bw())
+
+```
+
+```{r function 2D fold change plots}
+# ggplot 2D scatterplot
+
+plot_2D_fold_change <- function(data,
+                                x,
+                                y = "NintAll_c3_overall_MEAN_fc",
+                                xlab = "default",
+                                ylab = "default",
+                                axis_breaks_start = 1,
+                                axis_breaks_space = 2) {
+  stopifnot(is_character(c(data,x,y,xlab, ylab)))
+  
+  df <- data_list[[data]]
+  
+  # x & y labels handler
+  xlab <- ifelse(xlab == "default",
+                 yes = x,
+                 no = xlab)
+  
+  ylab <- ifelse(ylab == "default",
+                 yes = y,
+                 no = ylab)
+  
+  # axis limits
+  max_x <- max(df[ , x])
+  max_y <- max(df[ , y])
+  
+  limits_x <- c(0, max_x * 1.1)
+  limits_y <- c(0, max_y * 1.1)
+  
+  # plot
+  ggplot(df,
+         aes(
+          !!sym(x),
+          !!sym(y)
+          )) +
+    geom_hline(yintercept = 1,
+             linetype = "dashed",
+             color = "grey") +
+    geom_vline(xintercept = 1,
+             linetype = "dashed",
+             color = "grey") +
+    geom_point(
+      aes(shape = Batch,
+          fill = Channel3),
+      size = 3) +
+    facet_grid(Serum ~ Cell_line) +
+    labs(title = paste0("Data: ", data, "\n",
+                        x, " VS ", y),
+         x = xlab,
+         y = ylab) +
+    scale_x_continuous(
+      limits = limits_x,
+      breaks = seq(axis_breaks_start, (round(max_x))+2, by = axis_breaks_space)
+      ) +
+    scale_y_continuous(
+      limits = limits_y,
+      breaks = seq(axis_breaks_start, (round(max_y))+2, by = axis_breaks_space)
+      ) +
+    # use circle shape for a single batch, other shapes for multiple batches
+    {if ( length(unique(df$Batch)) == 1 ) scale_shape_manual(values = 21) } +
+    {if ( length(unique(df$Batch)) != 1 ) scale_shape_manual(values = c(22:25)) } +
+    scale_fill_manual(values = rev(RColorBrewer::brewer.pal(8, "Accent")) ) +
+    guides(fill = guide_legend(title = "2nd Marker",
+                               override.aes=list(shape=21, # needed to fix a legend bug due to use of scale_shape_manual()
+                                                 size=4)))
+}
+```
+
+### Data from all Batches (1-3)
+
+```{r scatterplot all points, include=TRUE}
+
+plot_2D_fold_change(data = "df_fc_IR_yH2AX",
+                    x = "NintAll_c2_overall_MEAN_fc",
+                    y = "NintAll_c3_overall_MEAN_fc")
+
+```
+
+### Data from all Batches 2 only
+
+```{r scatterplots Batch 2 w different speckle features, include=TRUE}
+
+# generate df filtered for Batch 2
+df_fc_IR_yH2AX_Batch2 <- df_fc_IR_yH2AX %>%
+  filter(Batch == 2)
+
+data_list$df_fc_IR_yH2AX_Batch2 <- df_fc_IR_yH2AX_Batch2
+
+# generate plots for different speckle features (i.e. different x axis)
+map_arg <- list("average_speckle_count_fc",
+                "average_speckle_intensity_fc",
+                "portion_of_cell_with_2+_speckle_fc",
+                "portion_of_cell_with_3+_speckle_fc")
+
+plots_Batch2 <- purrr::map(.x = map_arg,
+                           .f = plot_2D_fold_change,
+                           data = "df_fc_IR_yH2AX_Batch2")
+
+plots_Batch2
+
+```
+
+## Fold change plots with mean ± SD
+
+### Data from all Batches 2 only
+
+```{r 2D fold change plots mean sd}
+
+# function to plot 2D fold changes with mean ± SD
+plot_2D_fold_change_mean_SD <- function(data,
+                                        x,
+                                        y = "NintAll_c3_overall_MEAN_fc",
+                                        xlab = "default",
+                                        ylab = "default",
+                                        axis_breaks_start = 1,
+                                        axis_breaks_space = 2) {
+  stopifnot(is_character(c(data,x,y,xlab, ylab)))
+  
+  df <- data_list[[data]]
+  
+  x_mean <- paste0(x, "_mean")
+  x_sd <- paste0(x, "_sd")
+  
+  y_mean <- paste0(y, "_mean")
+  y_sd <- paste0(y, "_sd")
+  
+  # x & y labels handler
+  xlab <- ifelse(xlab == "default",
+                 yes = x_mean,
+                 no = xlab)
+  
+  ylab <- ifelse(ylab == "default",
+                 yes = y_mean,
+                 no = ylab)
+  
+  # axis limits
+  max_x <- max(df[ , x_mean]) + max(df[ , x_sd])
+  max_y <- max(df[ , y_mean]) + max(df[ , y_sd])
+  
+  limits_x <- c(-0.5, max_x * 1.1)
+  limits_y <- c(-0.5, max_y * 1.1)
+  
+  # plot
+  ggplot(df,
+         aes(
+          !!sym(x_mean),
+          !!sym(y_mean)
+          )) +
+    geom_hline(yintercept = 1,
+             linetype = "dashed",
+             color = "grey") +
+    geom_vline(xintercept = 1,
+             linetype = "dashed",
+             color = "grey") +
+    geom_errorbar(
+      aes(ymin = (!!sym(y_mean) - !!sym(y_sd)),
+          ymax = (!!sym(y_mean) + !!sym(y_sd)),
+          color = Channel3
+          ),
+      width = (max_x + 0.5) / 15) +
+    geom_errorbar(
+      aes(xmin = (!!sym(x_mean) - !!sym(x_sd)),
+          xmax = (!!sym(x_mean) + !!sym(x_sd)),
+          color = Channel3
+          ),
+      width = (max_y + 0.5) / 5) +
+    geom_point(
+      aes(shape = Batch,
+          fill = Channel3),
+      size = 3) +
+    facet_grid(Serum ~ Cell_line) +
+    labs(title = paste0("Data: ", data, "\n",
+                        x_mean, " VS ", y_mean),
+         x = xlab,
+         y = ylab) +
+    scale_x_continuous(
+      limits = limits_x,
+      breaks = seq(axis_breaks_start, (round(max_x))+2, by = axis_breaks_space)
+      ) +
+    scale_y_continuous(
+      limits = limits_y,
+      breaks = seq(axis_breaks_start, (round(max_y))+2, by = axis_breaks_space)
+      ) +
+    # use circle shape for a single batch, other shapes for multiple batches
+    {if ( length(unique(df$Batch)) == 1 ) scale_shape_manual(values = 21) } +
+    {if ( length(unique(df$Batch)) != 1 ) scale_shape_manual(values = c(22:25)) } +
+    scale_fill_manual(values = rev(RColorBrewer::brewer.pal(8, "Accent")) ) +
+    scale_color_manual(values = rev(RColorBrewer::brewer.pal(8, "Accent")) ) +
+    guides(fill = guide_legend(title = "2"^"nd" ~ "Marker",
+                               override.aes=list(
+                                 shape=21, # needed to fix a legend bug due to use of scale_shape_manual()
+                                 size=3)
+                               ),
+           color = FALSE
+           )
+}
+
+```
+
+```{r mean ± SD, include=TRUE}
+
+plots_Batch2_mean_SD <- purrr::map(.x = map_arg,
+                                   .f = plot_2D_fold_change_mean_SD,
+                                   data = "df_fc_IR_yH2AX_Batch2")
+
+plots_Batch2_mean_SD
+
+```
+
+```{r save plots to png}
+
+dpi <- 600
+
+# fold change plots w mean +- SD
+
+## average speckle count
+plot_width <- 450 * dpi/72
+plot_height <- plot_width * 0.42
+
+png(filename = paste0("Population_Level_Plots/average speckle counts_", Sys.Date(),".png"),
+    width = plot_width,
+    height = plot_height,
+    res = dpi)
+
+plot_2D_fold_change_mean_SD(data = "df_fc_IR_yH2AX_Batch2",
+                            x = "average_speckle_count_fc") +
+  labs(title = NULL,
+       x = "Average " *gamma* "H2AX"^"+" ~ "Speckle Counts",
+       y = "2"^"nd" ~ "Marker Mean Intensity"
+       )
+
+dev.off()
+
+## proportion nuclei with 3+ speckles
+png(filename = paste0("Population_Level_Plots/proportion 3+ speckles_", Sys.Date(),".png"),
+    width = plot_width,
+    height = plot_height,
+    res = dpi)
+
+plot_2D_fold_change_mean_SD(data = "df_fc_IR_yH2AX_Batch2",
+                            x = "portion_of_cell_with_3+_speckle_fc") +
+  labs(title = NULL,
+       x = "Proportions of Cells with ≥3 " *gamma* "H2AX"^"+" ~ "Speckles",
+       y = "2"^"nd" ~ "Marker Mean Intensity"
+       )
+
+dev.off()
+
+```
+
+
+# Morphology
+
+```{r morphology plots}
+
+# grouped boxplots 
+
+```
+
+# SA-B-Gal & EdU
+
+```{r Notes}
+### NOTES ###
+```
+
+

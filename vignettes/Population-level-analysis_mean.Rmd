@@ -1,0 +1,513 @@
+---
+title: "Population-level-analysis"
+author: "Francesco Neri"
+date: "`r Sys.Date()`"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = FALSE)
+
+#libraries
+library(tidyverse)
+library(readxl)
+library(scales)
+library(RColorBrewer)
+
+# custom functions
+## source load_functions
+source("C:/Users/ffran/AppData/Local/R/functions/R/load_functions.R")
+
+## load functions needed
+function_names <- c("add_fold_change",
+                    "update_variable_values",
+                    "add_mean_sd")
+
+load_functions(function_names)
+
+```
+
+```{r loading data}
+# data
+df <- read_xlsx(path = "C:/Users/ffran/Dropbox/R/Wirtz-collaboration/Analysis of Buck's images-v4_Mean Intensity.xlsx")
+
+str_replace_all_underscore <- function(string, pattern) {
+  str_replace_all(string, pattern, replacement = "_")
+}
+
+colnames(df) <- colnames(df) %>%
+  str_replace_all(pattern = "-| ", replacement = "_") %>%
+  str_replace_all("/", "VS")
+
+# adjust batch/experiment # and serum values
+df <- update_variable_values(df, "Batch", 5:7, 1:3) %>%
+  update_variable_values(., "Serum", "Serum starved", "Serum Starved")
+
+# remove rows with NA values (entire Plate IF1 HMVECL Batch 5 from 11/15/23 raw data)
+df <- df %>% na.omit()
+
+```
+
+```{r add fold change}
+
+# create vector containing the variables we want to calculate the fold change for
+all_var_names <- colnames(df)
+
+var_interval_start <- grep(all_var_names, pattern = "NintAll_c1_overall_MEAN")
+var_interval_end <- grep(all_var_names, pattern = "NintAll_c4_overall_MEAN")
+
+variables <- c("Narea_overall", "NASP_overall", "NSF_overall", all_var_names[var_interval_start:var_interval_end])
+
+# grouping arguments
+grouping <- c("Batch", "Plate", "Cell_line", "Legend", "Serum", "Channel2", "Channel3")
+
+# create df with additional fold change columns
+df_fc <- add_fold_change(data = df,
+                vars_to_normalize = variables,
+                grouping_arguments = grouping,
+                normalization_variable = "Legend",
+                normalization_value = "Mock"
+                )
+
+# add mean and sd values
+variables_fc <- paste0(variables, "_fc")
+
+df_fc <- add_mean_sd(data = df_fc,
+            vars = variables_fc,
+            grouping_arguments = grouping)
+
+```
+
+IR normalized based on Mock-IR staining
+
+```{r adjusting dfs for plots}
+
+# filter df_fc clean to have only IR wells stained with Abs
+ctl_stains <- c("Isotype CTL Ab", "no 1°Ab", "Isot CTL Ab high")
+
+df_fc_clean <- df_fc %>%
+  filter(Legend == "IR") %>%
+  filter(!(Channel2 %in% ctl_stains)) %>%
+  filter(!(Channel3 %in% ctl_stains)) # redundant
+
+df_fc_clean$Batch <- df_fc_clean$Batch %>% as.factor() # needed for labeling in ggplot
+
+# separate IMR90 from HMVECL, p21 from yH2AX
+df_fc_clean_IMR90 <- df_fc_clean %>%
+  filter(Cell_line == "IMR90")
+
+df_fc_clean_IMR90_p21 <- df_fc_clean_IMR90 %>%
+  filter(Channel2 == "p21")
+
+df_fc_clean_IMR90_yH2AX <- df_fc_clean_IMR90 %>%
+  filter(Channel2 == "yH2AX")
+
+df_fc_clean_HMVECL <- df_fc_clean %>%
+  filter(Cell_line == "HMVECL")
+
+df_fc_clean_HMVECL_p21 <- df_fc_clean_HMVECL %>%
+  filter(Channel2 == "p21")
+
+df_fc_clean_HMVECL_yH2AX <- df_fc_clean_HMVECL %>%
+  filter(Channel2 == "yH2AX")
+
+```
+
+## Fold change plots
+
+### p21 & yH2AX plots
+
+```{r ggplot settings}
+
+# set ggplot theme
+theme_set(theme_bw())
+
+# set 2nd marker palette
+palette_all <- rev(RColorBrewer::brewer.pal(9, "Set1")) %>%
+  .[c(1:3,5)]
+
+palette_p21 <- c("#999999", "#F781BF", "#A65628")
+palette_yH2AX <- c("#999999", "#F781BF", "#FF7F00")
+
+```
+
+```{r function 2D fold change plots}
+# ggplot 2D scatterplot
+
+plot_2D_fold_change <- function(data,
+                                faceting_Ch2 = FALSE,
+                                x,
+                                y,
+                                xlab = "Fold Change 1st Marker \n(p21/yH2AX)",
+                                ylab = "Fold Change 2nd Marker \n(LaminB1/HMGB1/p21/yH2AX") {
+  stopifnot(is.data.frame(data))
+  stopifnot(is_logical(faceting_Ch2))
+  stopifnot(is_character(c(x,y,xlab, ylab)))
+  
+  # title
+  title <- data$Cell_line %>%
+    unique()
+  
+  #palette
+  p21 <- if_else(any(unique(data$Channel3) %in% "p21"), TRUE, FALSE)
+  yH2AX <- if_else(any(unique(data$Channel3) %in% "yH2AX"), TRUE, FALSE)
+  
+  palette <- if ( p21 == TRUE & yH2AX == TRUE ) {palette_all}
+  else {
+    if (p21 == TRUE) {palette_p21} else {palette_yH2AX}
+  }
+  
+  # axis limits
+  max_x <- max(data[ , x])
+  max_y <- max(data[ , y])
+  
+  limits_x <- c(0, max_x * 1.1)
+  limits_y <- c(0, max_y * 1.1)
+  
+  # plot
+  ggplot(data,
+         aes(
+          !!sym(x),
+          !!sym(y)
+          )) +
+    geom_hline(yintercept = 1,
+             linetype = "dashed",
+             color = "grey") +
+    geom_vline(xintercept = 1,
+             linetype = "dashed",
+             color = "grey") +
+    geom_point(
+      aes(shape = Batch,
+          fill = Channel3),
+      size = 3) +
+    {if (faceting_Ch2 == TRUE) facet_grid(Serum ~ Channel2)} +
+    {if (faceting_Ch2 == FALSE) facet_grid(Serum ~ .)} +
+    labs(title = title,
+         x = xlab,
+         y = ylab) +
+    scale_x_continuous(
+      limits = limits_x,
+      breaks = seq(1, (round(max_x))+2, by = 2)
+      ) +
+    scale_y_continuous(
+      limits = limits_y,
+      breaks = seq(1, (round(max_y))+2, by = 2)
+      ) +
+    scale_shape_manual(values = c(22:25)) +
+    scale_fill_manual(values = palette) +
+    guides(fill = guide_legend(title = "2nd Marker",
+                               override.aes=list(shape=21, # needed to fix a legend bug due to use of scale_shape_manual()
+                                                 size=4)))
+}
+```
+
+```{r p21 & yH2AX plots}
+
+# all batches
+plot_2D_fold_change(df_fc_clean_HMVECL, x = "NintAll_c2_overall_MEAN_fc", y = "NintAll_c3_overall_MEAN_fc", faceting_Ch2 = TRUE)
+plot_2D_fold_change(df_fc_clean_IMR90, x = "NintAll_c2_overall_MEAN_fc", y = "NintAll_c3_overall_MEAN_fc", faceting_Ch2 = TRUE)
+
+# only batch 2
+
+## dfs
+df_fc_clean_HMVECL_batch2 <- df_fc_clean_HMVECL %>% filter(Batch == 2)
+df_fc_clean_IMR90_batch2 <- df_fc_clean_IMR90 %>% filter(Batch == 2)
+
+## plotting function ()only changed shape)
+plot_2D_fold_change_batch2 <- function(data,
+                                faceting_Ch2 = FALSE,
+                                x,
+                                y,
+                                xlab = "Fold Change 1st Marker \n(p21/yH2AX)",
+                                ylab = "Fold Change 2nd Marker \n(LaminB1/HMGB1/p21/yH2AX") {
+  stopifnot(is.data.frame(data))
+  stopifnot(is_logical(faceting_Ch2))
+  stopifnot(is_character(c(x,y,xlab, ylab)))
+  
+  # title
+  title <- data$Cell_line %>%
+    unique()
+  
+  #palette
+  p21 <- if_else(any(unique(data$Channel3) %in% "p21"), TRUE, FALSE)
+  yH2AX <- if_else(any(unique(data$Channel3) %in% "yH2AX"), TRUE, FALSE)
+  
+  palette <- if ( p21 == TRUE & yH2AX == TRUE ) {palette_all}
+  else {
+    if (p21 == TRUE) {palette_p21} else {palette_yH2AX}
+  }
+  
+  # axis limits
+  max_x <- max(data[ , x])
+  max_y <- max(data[ , y])
+  
+  limits_x <- c(0, max_x * 1.1)
+  limits_y <- c(0, max_y * 1.1)
+  
+  # plot
+  ggplot(data,
+         aes(
+          !!sym(x),
+          !!sym(y)
+          )) +
+    geom_hline(yintercept = 1,
+             linetype = "dashed",
+             color = "grey") +
+    geom_vline(xintercept = 1,
+             linetype = "dashed",
+             color = "grey") +
+    geom_point(
+      aes(shape = Batch,
+          fill = Channel3),
+      size = 3) +
+    {if (faceting_Ch2 == TRUE) facet_grid(Serum ~ Channel2)} +
+    {if (faceting_Ch2 == FALSE) facet_grid(Serum ~ .)} +
+    labs(title = title,
+         x = xlab,
+         y = ylab) +
+    scale_x_continuous(
+      limits = limits_x,
+      breaks = seq(1, (round(max_x))+2, by = 2)
+      ) +
+    scale_y_continuous(
+      limits = limits_y,
+      breaks = seq(1, (round(max_y))+2, by = 2)
+      ) +
+    scale_shape_manual(values = c(23)) + # from 22:25 to 23
+    scale_fill_manual(values = palette) +
+    guides(fill = guide_legend(title = "2nd Marker",
+                               override.aes=list(shape=21, # needed to fix a legend bug due to use of scale_shape_manual()
+                                                 size=4)))
+}
+
+## plots
+plot_2D_fold_change_batch2(df_fc_clean_HMVECL_batch2, x = "NintAll_c2_overall_MEAN_fc", y = "NintAll_c3_overall_MEAN_fc", faceting_Ch2 = TRUE)
+plot_2D_fold_change_batch2(df_fc_clean_IMR90_batch2, x = "NintAll_c2_overall_MEAN_fc", y = "NintAll_c3_overall_MEAN_fc", faceting_Ch2 = TRUE)
+
+```
+
+
+### p21 plots
+
+```{r p21 plots, fig.dim=c(4.5,5)}
+
+plot_2D_fold_change(df_fc_clean_HMVECL_p21,
+                    x = "NintAll_c2_overall_MEAN_fc",
+                    y = "NintAll_c3_overall_MEAN_fc",
+                    xlab = "Fold Change 1st Marker \n(p21)")
+plot_2D_fold_change(df_fc_clean_IMR90_p21,
+                    x = "NintAll_c2_overall_MEAN_fc",
+                    y = "NintAll_c3_overall_MEAN_fc",
+                    xlab = "Fold Change 1st Marker \n(p21)")
+
+```
+
+### yH2AX plots
+
+```{r yH2AX plots, fig.dim=c(4.5,5)}
+
+plot_2D_fold_change(df_fc_clean_HMVECL_yH2AX,
+                    x = "NintAll_c2_overall_MEAN_fc",
+                    y = "NintAll_c3_overall_MEAN_fc",
+                    xlab = "Fold Change 1st Marker \n(yH2AX)")
+plot_2D_fold_change(df_fc_clean_IMR90_yH2AX,
+                    x = "NintAll_c2_overall_MEAN_fc",
+                    y = "NintAll_c3_overall_MEAN_fc",
+                    xlab = "Fold Change 1st Marker \n(yH2AX)")
+
+```
+
+# Fold change plots with mean ± SD
+
+```{r summary dfs}
+
+# creating summary df with mean and sd for Channel2 and Channel3
+start_var <- grep("Narea_overall_fc_mean", colnames(df_fc_clean))
+end_var <- grep("NintAll_c3_overall_MEAN_fc_sd", colnames(df_fc_clean))
+var_range <- c(start_var:end_var)
+
+grouping_with_mean_sd <- c(grouping, colnames(df_fc_clean)[var_range])
+
+df_summary <- df_fc_clean %>%
+  group_by(!!!syms(grouping_with_mean_sd)) %>%
+  summarise()
+
+# creating cell type and Channel2 specific dfs
+## IMR90
+df_summary_IMR90 <- df_summary %>%
+  filter(Cell_line == "IMR90")
+
+df_summary_IMR90_p21 <- df_summary_IMR90 %>%
+  filter(Channel2 == "p21")
+
+df_summary_IMR90_yH2AX <- df_summary_IMR90 %>%
+  filter(Channel2 == "yH2AX")
+
+## HMVECL
+df_summary_HMVECL <- df_summary %>%
+  filter(Cell_line == "HMVECL")
+
+df_summary_HMVECL_p21 <- df_summary_HMVECL %>%
+  filter(Channel2 == "p21")
+
+df_summary_HMVECL_yH2AX <- df_summary_HMVECL %>%
+  filter(Channel2 == "yH2AX")
+
+```
+
+
+```{r 2D fold change plots mean sd}
+# ggplot 2D scatterplot with mean + SD
+
+plot_2D_fold_change_mean_sd <- function(data,
+                                faceting_Ch2 = FALSE,
+                                x, x_sd,
+                                y, y_sd,
+                                xlab = "Fold Change 1st Marker \n(p21/yH2AX)",
+                                ylab = "Fold Change 2nd Marker \n(LaminB1/HMGB1/p21/yH2AX",
+                                axis_breaks_start = 1,
+                                axis_breaks_spacing = 2) {
+  stopifnot(is.data.frame(data))
+  stopifnot(is_logical(faceting_Ch2))
+  stopifnot(is_character(c(x, y, xlab, ylab)))
+  
+  #title
+  title <- data$Cell_line %>%
+    unique()
+  
+  #palette
+  p21 <- if_else(any(unique(data$Channel3) %in% "p21"), TRUE, FALSE)
+  yH2AX <- if_else(any(unique(data$Channel3) %in% "yH2AX"), TRUE, FALSE)
+  
+  palette <- if ( p21 == TRUE & yH2AX == TRUE ) {palette_all}
+  else {
+    if (p21 == TRUE) {palette_p21} else {palette_yH2AX}
+  }
+  
+  # axis limits
+  max_x <- max(data[ , x]) + max(data[ , x_sd])
+  max_y <- max(data[ , y]) + max(data[ , y_sd])
+  
+  limits_x <- c(0, max_x * 1.05)
+  limits_y <- c(0, max_y * 1.05)
+  
+  # plot
+  ggplot(data,
+         aes(!!sym(x),
+             !!sym(y)
+             )
+         ) +
+    geom_hline(yintercept = 1,
+             linetype = "dashed",
+             color = "grey") +
+    geom_vline(xintercept = 1,
+             linetype = "dashed",
+             color = "grey") +
+    geom_errorbar(
+      aes(ymin = (!!sym(y) - !!sym(y_sd)),
+          ymax = (!!sym(y) + !!sym(y_sd)),
+          color = Channel3
+          ),
+      width = max_x/20) +
+    geom_errorbar(
+      aes(xmin = (!!sym(x) - !!sym(x_sd)),
+          xmax = (!!sym(x) + !!sym(x_sd)),
+          color = Channel3
+          ),
+      width = max_y/20) +
+    geom_point(
+      aes(shape = Batch,
+          fill = Channel3),
+      size = 3) +
+    {if (faceting_Ch2 == TRUE) facet_grid(Serum ~ Channel2)} +
+    {if (faceting_Ch2 == FALSE) facet_grid(Serum ~ .)} +
+    labs(title = title,
+         x = xlab,
+         y = ylab) +
+    scale_x_continuous(
+      limits = limits_x,
+      breaks = seq(axis_breaks_start, (round(max_x))+2, by = axis_breaks_spacing)
+      ) +
+    scale_y_continuous(
+      limits = limits_y,
+      breaks = seq(axis_breaks_start, (round(max_y))+2, by = axis_breaks_spacing)
+      ) +
+    scale_shape_manual(values = c(22:25)) +
+    scale_fill_manual(values = palette) +
+    scale_color_manual(values = palette) +
+    guides(
+      color = "none", # to fix -> remove from legend
+      fill = guide_legend(title = "2nd Marker",
+                               override.aes=list(shape=21, # needed to fix a legend bug due to use of scale_shape_manual()
+                                                 size=4)))
+}
+```
+
+```{r p21 & yH2AX mean sd plots}
+
+plot_2D_fold_change_mean_sd(df_summary_HMVECL,
+                            x = "NintAll_c2_overall_MEAN_fc_mean", x_sd = "NintAll_c2_overall_MEAN_fc_sd",
+                            y = "NintAll_c3_overall_MEAN_fc_mean", y_sd = "NintAll_c3_overall_MEAN_fc_sd",
+                            faceting_Ch2 = TRUE)
+plot_2D_fold_change_mean_sd(df_summary_IMR90,
+                            x = "NintAll_c2_overall_MEAN_fc_mean", x_sd = "NintAll_c2_overall_MEAN_fc_sd",
+                            y = "NintAll_c3_overall_MEAN_fc_mean", y_sd = "NintAll_c3_overall_MEAN_fc_sd",
+                            faceting_Ch2 = TRUE)
+
+```
+
+
+### p21 plots
+
+```{r p21 mean sd plots, fig.dim=c(4.5,5)}
+
+plot_2D_fold_change_mean_sd(df_summary_HMVECL_p21,
+                            x = "NintAll_c2_overall_MEAN_fc_mean", x_sd = "NintAll_c2_overall_MEAN_fc_sd",
+                            y = "NintAll_c3_overall_MEAN_fc_mean", y_sd = "NintAll_c3_overall_MEAN_fc_sd",
+                            xlab = "Fold Change 1st Marker \n(p21)")
+plot_2D_fold_change_mean_sd(df_summary_IMR90_p21,
+                            x = "NintAll_c2_overall_MEAN_fc_mean", x_sd = "NintAll_c2_overall_MEAN_fc_sd",
+                            y = "NintAll_c3_overall_MEAN_fc_mean", y_sd = "NintAll_c3_overall_MEAN_fc_sd",
+                            xlab = "Fold Change 1st Marker \n(p21)")
+
+```
+
+### yH2AX plots
+
+```{r yH2AX mean sd plots, fig.dim=c(4.5,5)}
+
+plot_2D_fold_change_mean_sd(df_summary_HMVECL_yH2AX,
+                            x = "NintAll_c2_overall_MEAN_fc_mean", x_sd = "NintAll_c2_overall_MEAN_fc_sd",
+                            y = "NintAll_c3_overall_MEAN_fc_mean", y_sd = "NintAll_c3_overall_MEAN_fc_sd",
+                            xlab = "Fold Change 1st Marker \n(yH2AX)")
+plot_2D_fold_change_mean_sd(df_summary_IMR90_yH2AX,
+                            x = "NintAll_c2_overall_MEAN_fc_mean", x_sd = "NintAll_c2_overall_MEAN_fc_sd",
+                            y = "NintAll_c3_overall_MEAN_fc_mean", y_sd = "NintAll_c3_overall_MEAN_fc_sd",
+                            xlab = "Fold Change 1st Marker \n(yH2AX)")
+
+```
+
+```{r morphology plots}
+
+plot_2D_fold_change_mean_sd(df_summary_HMVECL,
+                            x = "Narea_overall_fc_mean", x_sd = "Narea_overall_fc_sd",
+                            y = "NSF_overall_fc_mean", y_sd = "NSF_overall_fc_sd",
+                            xlab = "Nuclear Area (px^2)",
+                            ylab = "NSF",
+                            axis_breaks_start = 0,
+                            axis_breaks_spacing = 0.5)
+plot_2D_fold_change_mean_sd(df_summary_HMVECL,
+                            x = "Narea_overall_fc_mean", x_sd = "Narea_overall_fc_sd",
+                            y = "NASP_overall_fc_mean", y_sd = "NASP_overall_fc_sd",
+                            xlab = "Nuclear Area (px^2)",
+                            ylab = "Nuclear ASP",
+                            faceting_Ch2 = TRUE)
+
+```
+
+
+```{r Notes}
+### NOTES ###
+```
+
+
