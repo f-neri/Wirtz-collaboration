@@ -7,9 +7,10 @@ output: html_document
 
 ```{r setup, include=FALSE}
 knitr::opts_chunk$set(echo = FALSE,
+                      include = FALSE,
                       fig.align='center',
                       out.width="100%",
-                      fig.width=8,
+                      fig.width=7.5,
                       fig.asp=0.618)
 
 # libraries
@@ -18,7 +19,7 @@ library(readxl)
 library(scales)
 library(RColorBrewer)
 library(ggplot2)
-library(multcomp)
+# library(multcomp) ! I think multcomp masks dplyr::fitler !
 ```
 
 Data on functional comparison between G1-enriched vs non-enriched senescent endothelial cells (induction: 15 Gy IR).
@@ -89,14 +90,41 @@ tidy_IAoutput <- function(data,
 
 ```{r load IAoutput files and metadata, include=FALSE}
 
-# IAoutput files
-IAoutput_datapaths <- c(P1 = "C:/Users/ffran/Dropbox/R/Wirtz-collaboration/FN048.01/IAoutput_P1.xlsx",
-                        P2 = "C:/Users/ffran/Dropbox/R/Wirtz-collaboration/FN048.01/IAoutput_P2.xlsx",
-                        P3_IL6 = "C:/Users/ffran/Dropbox/R/Wirtz-collaboration/FN048.01/IAoutput_P3-IL6.xlsx")
+# Load imaging data
+df <- tibble(
+  Dataset = c("FN048.01","FN048.02","FN048.03")
+) %>%
+  # load IAoutput files
+  mutate(
+    # paths
+  ) %>%
+  
+  # load metadata files
+  # unite IAoutput with metadata
+  # merge P1 and P2
+  
+  c(
+  P1 = "inst/extdata/FN048.01/IAoutput_P1.xlsx",
+  P2 = "inst/extdata/FN048.01/IAoutput_P2.xlsx",
+  P3_IL6 = "inst/extdata/FN048.01/IAoutput_P3-IL6.xlsx"
+  ) %>%
+  tibble(plate = c("P1","P2","P3_IL6"),
+         paths = .) %>%
+  # read excel files
+  mutate(
+    data = map(.$paths,
+               readxl::read_xlsx,
+               skip=1, na="NA"
+               )
+  )
 
-plate_names <- IAoutput_datapaths %>%
-  basename() %>%
-  tools::file_path_sans_ext()
+df
+
+# read xlsx files
+IAoutput_dfs <- map(
+  
+)
+
 
 IAoutput_dfs <- vector(mode = "list", length = length(IAoutput_datapaths))
 
@@ -487,27 +515,13 @@ if(summary(anova_result)[[1]]$'Pr(>F)'[1] < 0.05) {
 
 ```{r plot IL6, fig.width=4, out.width="50%"}
 
-plot_IL6(df_IL6)
-
 
 
 ```
 
-```{r to do}
+```{r Notes}
 
-# calculate G1 and G2 percentages
-#> generate histogram ✅
-#> generate threshold ✅
-#> calculate percentages ✅
-#> plot percentages for each condition (~ ABT263 conc) ✅
 
-# calculate overall cell viability ✅
-
-# calculate G1 cell viability ✅
-
-# calculate G2 cell viability ✅
-
-# calculate IL6 expression per cell ✅
 
 ```
 

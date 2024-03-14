@@ -16,10 +16,12 @@ knitr::opts_chunk$set(echo = FALSE,
 
 # libraries
 library(tidyverse)
+library(broom)
 library(patchwork)
 library(readxl)
 library(scales)
 library(RColorBrewer)
+library(ggsignif)
 
 library(functions) # custom functions
 
@@ -89,15 +91,18 @@ df_SABGal_EdU <- SABGal_EdU %>%
     # create fct column that combines condition_serum to assign colors
     Serum_Condition = paste0(Serum, " ", Condition),
     Serum_Condition = factor(Serum_Condition, levels = c("SS CTL", "FS CTL", "SS IR", "FS IR")),
-    # turn Condition into a factor
-    Condition = factor(Condition, levels = c("CTL", "IR")),
-    # turn Dataset into a factor
+    # turn Dataset, Condition, Serum, and Cell.Type into factors
     Dataset = factor(Dataset),
+    Condition = factor(Condition, levels = c("CTL", "IR")),
+    Serum = factor(Serum, levels = c("FS", "SS")),
+    Cell.Type = factor(Cell.Type, levels = c("HMVEC-L", "IMR-90")),
     # turn percentages into proportions
     across(contains("percentage"), ~ . / 100)
   ) %>%
   # reorder cols
-  select(1:grep("Serum", colnames(.)), Serum_Condition, everything())
+  select(1:grep("Serum", colnames(.)), Serum_Condition, everything()) %>%
+  # turn data.frame into tibble
+  tibble()
 
 df_SABGal_EdU_summary <- df_SABGal_EdU %>%
   # calculate mean & SD
@@ -131,23 +136,24 @@ df_SABGal_EdU_summary_split <- df_SABGal_EdU_summary %>%
 
 plot_grid_SABGal_EdU <- function(data) {
   ggplot(data,
-         aes(x = Serum,
+         aes(x = Cell.Type,
              y = Condition)) +
     geom_tile(color = "black",
               fill = "white") +
     geom_text(label = "image",
               size = 4) +
-    facet_grid(. ~ Cell.Type) +
+    # facet_grid(. ~ Cell.Type) +
     labs(x = NULL,
          y = NULL) +
+    scale_x_discrete(position = "top") +
     theme_minimal()
 }
 
 grid_SABGal_EdU <- plot_grid_SABGal_EdU(df_SABGal_EdU_summary)
 
 grid_SABGal_EdU_FS <- plot_grid_SABGal_EdU(df_SABGal_EdU_summary %>%
-                                             filter(Serum == "FS")) +
-  theme(axis.text.x = element_blank())
+                                             filter(Serum == "FS"))
+  # theme(axis.text.x = element_blank())
 
 grid_SABGal_EdU_FS + labs(title = "FS only images")
 
@@ -473,6 +479,281 @@ FS_only +
 
 ```
 
+#### Single marker plots
+
+```{r df_single_marker}
+
+df_single_marker <- df_SABGal_EdU %>%
+  # remove dataset 1, because it didn't have enough cells
+  filter(Dataset != "1") %>%
+  # split df based on Serum
+  group_by(Serum) %>%
+  nest()%>%
+  # re-add Serum as variable in split df
+  # Serum will be needed for faceting within the plot function
+  mutate(
+    data = map(data, ~ bind_cols(Serum = first(Serum), .x))
+  )
+
+# add FS + SS dataset
+FS_SS <- tibble(
+  Serum = "FS_SS",
+  data = df_SABGal_EdU %>%
+    # remove dataset 1, because it didn't have enough cells
+    filter(Dataset != "1") %>%
+    list()
+)
+
+df_single_marker <- df_single_marker %>%
+  dplyr::bind_rows(FS_SS)
+
+```
+
+```{r function calculate_test_results}
+
+calculate_test_results <- function(data, variables, grouping) {
+  
+  stopifnot(is.data.frame(data))
+  stopifnot(is.character(variables))
+  stopifnot(is.character(grouping))
+  
+  df <- data %>%
+    group_by(!!!syms(grouping)) %>%
+    summarise(
+      across(all_of(variables),
+             ~ list(tidy(
+               wilcox.test(.x ~ Condition,
+                           exact = FALSE) # same as default, but prevents warning
+             ))
+             ),
+      .groups = "drop"
+    ) %>%
+    pivot_longer(cols = !any_of(grouping), names_to = "Variable", values_to = "Test_Results") %>%
+    # adjust p values for multiple comparisons by FDR
+    unnest(Test_Results) %>%
+    ## group by: Variable and grouping variable outside of Cell.Type and Serum
+    group_by(
+      !!!syms(c(grouping[!str_detect(grouping, "Cell.Type|Serum")], "Variable"))
+    ) %>%
+    mutate(
+      p_adj = p.adjust(p.value, method = "BH"),
+      # add annotation col
+      annotation = case_when(
+        p_adj < 0.0001 ~ "****",
+        p_adj < 0.001 ~ "***",
+        p_adj < 0.01 ~ "**",
+        p_adj < 0.05 ~ "*",
+        TRUE ~ sprintf("%.3f", p_adj)
+      )
+    ) %>%
+    ungroup()
+  
+  # return df
+  df
+  
+}
+
+```
+
+```{r function calculate_annotation_position}
+
+calculate_annotation_position <- function(test_results_df, original_df, grouping) {
+  
+  # get variables to calculate the max value of
+  Variables <- test_results_df$Variable %>% unique()
+  
+  # calculate max value of all Variables for each grouped subset
+  max_values <- original_df %>%
+    # calculate 
+    group_by(!!!syms(grouping)) %>%
+    summarise(
+      across(.cols = all_of(Variables),
+             .fns = max)
+    ) %>%
+    pivot_longer(cols = !any_of(grouping),
+                 names_to = "Variable",
+                 values_to = "ymax")
+  
+  df <- test_results_df %>%
+    mutate(
+      # calculate x coordinates
+      x_position = as.integer(Cell.Type)  
+    ) %>%
+    # add ymax values
+    left_join(max_values) %>%
+    # simplify df
+    select(1:which(names(.) == "Variable"), p.value, which(names(.) == "p_adj"):length(names(.)))
+  
+  # return df
+  df
+}
+
+```
+
+
+```{r stats df_single_marker}
+
+# Compare IR vs CTL samples 
+SABGal_EdU_test_results <- df_single_marker %>%
+  # select df with both FS and SS
+  filter(Serum == "FS_SS") %>%
+  .$data %>%
+  .[[1]] %>%
+  # turn categorical variables into factors
+  mutate(
+    # Condition
+    Condition = factor(Condition),
+    # Serum
+    Serum = factor(Serum),
+    # Cell.Type
+    Cell.Type = factor(Cell.Type),
+  ) %>%
+  # calculate adj-pvalues
+  calculate_test_results(
+    data = .,
+    variables = c("EdU_median", "SABGal_median"),
+    grouping = c("Serum", "Cell.Type")
+  ) %>%
+  # calculate x:y coordinates for stat annotations
+  calculate_annotation_position(
+    test_results_df = .,
+    original_df = df_single_marker %>%
+      # select df with both FS and SS
+      filter(Serum == "FS_SS") %>%
+      .$data %>%
+      .[[1]],
+    grouping = c("Serum", "Cell.Type")
+  )
+
+SABGal_EdU_test_results
+
+```
+
+
+```{r function plot single marker}
+
+plot_single_marker <- function(data, y, ylab, title, test_results, ymax_multiplier = 1.1) {
+  
+  # palette
+  palette <- RColorBrewer::brewer.pal(8, "Accent")
+  
+  # generate summary data for geom_col
+  summary_data <- data %>%
+    group_by(Cell.Type, Condition, Serum) %>%
+    mutate(median = median(!!sym(y)),
+           mean = mean(!!sym(y)),
+           sd = sd(!!sym(y)))
+  
+  # adjust test_results based on selected y/variable
+  test_results <- test_results %>%
+    filter(
+      # filter for Variable
+      Variable == y,
+      # filter for Serum groups present in data
+      Serum %in% unique(data$Serum)
+    )
+  ## filter for Channel 3 groups if present in data
+    if (any(names(test_results) %in% "Channel3")) {
+       test_results <- test_results %>%
+         filter(Channel3 %in% unique(data$Channel3))
+    }
+    
+  
+  # calculate absolute value to nudge ymax by
+  ymax_nudge <- test_results %>%
+    # filter for highest ymax value
+    filter(ymax == max(ymax)) %>%
+    mutate(
+      # apply ymax_multiplier
+      ymax_adjusted = ymax * ymax_multiplier,
+      ymax_nudge = ymax_adjusted - ymax
+    ) %>%
+    .$ymax_nudge
+
+  # plot
+  ggplot(data,
+         aes(y = !!sym(y),
+             x = Cell.Type)
+         ) +
+    geom_col(data = summary_data,
+             aes(x = Cell.Type,
+                 y = median,
+                 fill = Condition),
+             color = "black",
+             # fill = "white",
+             width = 0.7,
+             position = position_dodge(width = 0.8)) +
+    geom_point(size=2,
+               alpha=1/1.2,
+               shape = 21,
+               aes(fill = Condition),
+               position = position_jitterdodge(dodge.width = 0.8,
+                                               jitter.width = 0.5, jitter.height = 0)
+               ) +
+    # add stats
+    ## line
+    geom_segment(
+      data = test_results,
+      aes(x = x_position-0.2, xend = x_position+0.2,
+          y = ymax + ymax_nudge)
+      ) +
+    ## label
+    geom_text(
+      data = test_results,
+      aes(x = x_position,
+          y = ymax + ymax_nudge,
+          label = annotation
+          ),
+      size = 3, vjust = -0.5
+    ) +
+    facet_grid(Serum ~ .) +
+    coord_cartesian(ylim = c(NA, test_results$ymax %>% max(.) * (ymax_multiplier + 0.1))) +
+    scale_color_manual(values = palette) +
+    scale_fill_manual(values = palette) +
+    labs(title = title,
+         y = ylab) +
+    guides(color = guide_legend(override.aes = list(shape=21))) +
+    theme(plot.title = element_text(hjust = 0.5),
+          axis.title.x = element_blank())
+}
+
+```
+
+```{r plot single marker}
+
+# mapping arguments
+map_arg <- list(
+  "y" = c("SABGal_median", "EdU_median"),
+  "ylab" = c("Sum Optical Density", "Sum Intensity (AU)"),
+  title = c("SA-β-Gal", "EdU")
+)
+
+
+SABGal_EdU_plots <- df_single_marker$data %>%
+  # generate plots
+  map(.f = ~ pmap(
+    map_arg,
+    plot_single_marker,
+    data = .x,
+    test_results = SABGal_EdU_test_results
+    )) %>%
+  # name plots
+  ## Serum
+  set_names(df_single_marker$Serum) %>%
+  ## SABGal or EdU
+  map(~ set_names(.x, map_arg$y %>% str_remove_all(pattern = "_median"))
+      ) %>%
+  list_flatten()
+
+# remove Serum faceting for FS and SS only plots
+SABGal_EdU_plots[1:4] <- SABGal_EdU_plots[1:4] %>%
+  map(~ .x + facet_grid())
+
+SABGal_EdU_plots
+
+```
+
+
 ### Panel SA-$\beta$-Gal & EdU data
 
 ```{r panel_SABGal_EdU_data, include=TRUE}
@@ -593,23 +874,26 @@ df_ICC_summary_all_datasets <- df_ICC_Morph %>%
 
 plot_grid_ICC_Morph <- function(data) {
   ggplot(data,
-         aes(x = Serum,
-             y = Condition)) +
+         aes(x = Condition,
+             y = Channel3)) +
     geom_tile(color = "black",
               fill = "white") +
     geom_text(label = "image",
               size = 4) +
-    facet_grid(Cell.Type ~ Channel3) +
+    facet_grid(. ~ Cell.Type) +
     labs(x = NULL,
          y = NULL) +
     theme_minimal()
 }
 
-grid_ICC_Morph <- plot_grid_ICC_Morph(df_ICC_summary)
+grid_ICC_Morph <- plot_grid_ICC_Morph(df_ICC_summary %>%
+                                        mutate(Condition = factor(Condition, levels = c("CTL","IR")))
+                                        )
 
-grid_ICC_Morph_FS <- plot_grid_ICC_Morph(df_ICC_summary %>%
-                                             filter(Serum == "FS")) +
-  theme(axis.text.x = element_blank())
+grid_ICC_Morph_FS <- plot_grid_ICC_Morph(
+  df_ICC_summary %>%
+    mutate(Condition = factor(Condition, levels = c("CTL","IR"))) %>%
+    filter(Serum == "FS"))
 
 grid_ICC_Morph_FS + labs(title = "FS only images")
 
@@ -998,6 +1282,169 @@ plot_2D_fc_no_datasets <- function(data,
 
 ```
 
+#### Single marker plots
+
+```{r df single marker ICC}
+
+# generate df with both FS and SS
+FS_SS <- df_ICC_Morph %>%
+  # remove dataset 1, because it didn't have enough cells
+  filter(Dataset != "1") %>%
+  # turn categorical vars into factors
+  mutate(
+    Condition = factor(Condition, levels = c("CTL","IR")),
+    Serum = factor(Serum, levels = c("FS", "SS")),
+    Cell.Type = factor(Cell.Type, levels = c("HMVEC-L", "IMR-90")),
+    Channel3 = factor(Channel3)
+  )
+
+# split df based on Serum
+df_ICC_Morph_Serum <- FS_SS %>%
+  group_by(Serum) %>%
+  nest() %>%
+  # re-add Serum as variable in split df
+  # Serum will be needed for faceting within the plot function
+  mutate(
+    data = map(data, ~ bind_cols(Serum = first(Serum), .x))
+  ) %>%
+  ungroup()
+
+# add FS_SS df
+df_ICC_Morph_Serum <- df_ICC_Morph_Serum %>%
+  bind_rows(
+    tibble(
+      Serum = "FS_SS",
+      data = list(FS_SS)
+    )
+  )
+
+# split df based on Serum and the 2nd marker (Channel3)
+df_ICC_Morph_Serum_2ndMarker <- FS_SS %>%
+  group_by(Serum, Channel3) %>%
+  nest() %>%
+  # re-add Serum and Channel3 as variable in split df
+  # they will be needed for the plotting function
+  mutate(
+    data = map(data, ~ bind_cols(Serum = Serum, .x)),
+    data = map(data, ~ bind_cols(Channel3 = Channel3, .x))
+  ) %>%
+  ungroup()
+
+# add FS_SS df
+df_FS_SS <- FS_SS %>%
+  group_by(Channel3) %>%
+  nest() %>%
+  mutate(
+    Serum = "FS_SS",
+    # re-add Serum and Channel3 as variable in split df
+    # they will be needed for the plotting function
+    data = map(data, ~ bind_cols(Channel3 = Channel3, .x))
+    )
+
+df_ICC_Morph_Serum_2ndMarker <- df_ICC_Morph_Serum_2ndMarker %>%
+  bind_rows(df_FS_SS)
+
+```
+
+```{r stats single marker ICC}
+
+original_df <- df_ICC_Morph_Serum %>%
+  # select df with both FS and SS
+  filter(Serum == "FS_SS") %>%
+  .$data %>%
+  .[[1]]
+
+# Compare IR vs CTL samples for yH2AX
+ICC_Morph_Serum_test_results <- original_df %>%
+  # calculate adj-pvalues
+  calculate_test_results(
+  variables = c("average_speckle_count"),
+  grouping = c("Serum", "Cell.Type")
+  ) %>%
+  # calculate x:y coordinates for stat annotations
+  calculate_annotation_position(
+    test_results_df = .,
+    original_df = original_df,
+    grouping = c("Serum", "Cell.Type")
+  )
+
+ICC_Morph_Serum_test_results
+
+original_df <- df_ICC_Morph_Serum_2ndMarker %>%
+  # select df with both FS and SS
+  filter(Serum == "FS_SS") %>%
+  # flatten df
+  select(data) %>%
+  unnest(data)
+
+# Compare IR vs CTL samples for 2nd markers
+ICC_Morph_Serum_2ndMarker_test_results <- original_df %>%
+  # calculate adj-pvalues
+  calculate_test_results(
+    variables = c("NintAll_c3_overall_MEAN"),
+    grouping = c("Serum", "Cell.Type", "Channel3")
+  ) %>%
+  # calculate x:y coordinates for stat annotations
+  calculate_annotation_position(
+    test_results_df = .,
+    original_df = original_df,
+    grouping = c("Serum", "Cell.Type", "Channel3")
+  )
+
+ICC_Morph_Serum_2ndMarker_test_results
+
+```
+
+
+```{r plot single marker ICC}
+
+# generate yH2AX plots for each Serum condition
+ICC_yH2AX <- map(
+  df_ICC_Morph_Serum$data,
+  plot_single_marker,
+  y = "average_speckle_count", ylab = "Average Foci", title = "γH2AX",
+  test_results = ICC_Morph_Serum_test_results
+  ) %>%
+  set_names(paste0(df_ICC_Morph_Serum$Serum, "_yH2AX"))
+
+# remove faceting for FS and SS only plots
+ICC_yH2AX[1:2] <- ICC_yH2AX[1:2] %>%
+  map(~ .x + facet_grid())
+
+# print 
+ICC_yH2AX
+
+# generate 2nd Markers plots for each Serum condition
+
+## map arg
+map_arg <- df_ICC_Morph_Serum_2ndMarker %>%
+  mutate(
+    # generate ylab labels
+    ylab = "Intensity (AU)",
+    title = Channel3
+  ) %>%
+  # keep only cols to be used as fun arguments
+  select(data, ylab, title)
+
+## plot
+ICC_2ndMarkers <- pmap(
+  map_arg,
+  plot_single_marker,
+  y = "NintAll_c3_overall_MEAN",
+  test_results = ICC_Morph_Serum_2ndMarker_test_results
+) %>%
+  set_names(paste(df_ICC_Morph_Serum_2ndMarker$Serum,
+                  df_ICC_Morph_Serum_2ndMarker$Channel3,
+                  sep = "_"))
+
+# remove faceting for FS and SS only plots
+ICC_2ndMarkers[1:6] <- ICC_2ndMarkers[1:6] %>%
+  map(~ .x + facet_grid())
+
+ICC_2ndMarkers
+```
+
+
 ### Panel ICC data
 
 ```{r Panel ICC data}
@@ -1227,10 +1674,9 @@ map_arg <- list(y = c("Narea_overall", "NASP_overall", "NSF_overall"),
                 ylab = c("Nuclear Area (px^2)", "Nuclear Aspect Ratio", "Nuclear Shape Factor")
                 )
 # generate plots
-Morph_alldp <- pmap(map_arg, plot_Morph, data = list_df_Morph_FS$alldp)
-
-# name plots
-names(Morph_alldp) <- c("Area", "ASP", "SF")
+Morph_alldp <- pmap(map_arg, plot_Morph, data = list_df_Morph_FS$alldp) %>%
+  # name plots
+  set_names(c("Area", "ASP", "SF"))
 
 Morph_alldp
 
@@ -1243,10 +1689,8 @@ map_arg_summary <- map_arg
 map_arg_summary$y <- paste0(map_arg_summary$y, "_mean")
 
 # generate plots
-Morph_summary <- pmap(map_arg_summary, plot_Morph_summary, data = list_df_Morph_FS$summary)
-
-# name plots
-names(Morph_summary) <- c("Area", "ASP", "SF")
+Morph_summary <- pmap(map_arg_summary, plot_Morph_summary, data = list_df_Morph_FS$summary) %>%
+  set_names(c("Area", "ASP", "SF"))
 
 Morph_summary
 
@@ -1266,10 +1710,110 @@ Morph_summary_allds
 
 ```
 
+#### Single marker
+
+```{r df single marker morph}
+
+FS_SS <- list_df_Morph$alldp %>%
+  # remove dataset 1 because of low cell counts
+  filter(Dataset != 1) %>%
+  # turn categorical vars into factors
+  mutate(
+    Condition = factor(Condition),
+    Serum = factor(Serum),
+    Cell.Type = factor(Cell.Type)
+  )
+
+df_single_marker_Morph <- FS_SS %>%
+  group_by(Serum) %>%
+  nest() %>%
+  # re-add Serum variable
+  # for faceting in plottting function
+  mutate(
+    data = map(data, ~ bind_cols(Serum = Serum, .x))
+  ) %>%
+  ungroup()
+
+# re-add df with both FS and SS
+df_FS_SS <- tibble(
+  Serum = "FS_SS",
+  data = list(FS_SS)
+)
+
+df_single_marker_Morph <- df_single_marker_Morph %>%
+  bind_rows(df_FS_SS)
+
+df_single_marker_Morph
+
+```
+
+```{r stats single marker morph}
+
+# Compare IR vs CTL samples for yH2AX
+single_marker_Morph_test_results <- df_single_marker_Morph %>%
+  # select df with both FS and SS
+  filter(Serum == "FS_SS") %>%
+  .$data %>%
+  .[[1]] %>%
+  # calculate adj-pvalues
+  calculate_test_results(
+  variables = c("Narea_overall", "NSF_overall"),
+  grouping = c("Serum", "Cell.Type")
+  ) %>%
+  # calculate x:y coordinates for stat annotations
+  calculate_annotation_position(
+    test_results_df = .,
+    original_df = df_single_marker_Morph %>%
+      # select df with both FS and SS
+      filter(Serum == "FS_SS") %>%
+      .$data %>%
+      .[[1]],
+    grouping = c("Serum", "Cell.Type")
+  )
+
+single_marker_Morph_test_results
+
+```
+
+
+```{r plot single marker morph}
+
+# mapping arguments
+map_arg <- list(
+  y = c("Narea_overall","NASP_overall","NSF_overall"),
+  ylab = c("Nuclear Area (px^2)", "Nuclear Aspect Ratio", "Nuclear Shape Factor"),
+  title = c("Area","Aspect Ratio","Shape Factor")
+)
+
+# generate plots
+Morph_plots <- df_single_marker_Morph$data %>%
+  # plots
+  map(.f = ~ pmap(
+    map_arg,
+    plot_single_marker,
+    data = .x,
+    test_results = single_marker_Morph_test_results
+  )) %>%
+  # name plots
+  ## Serum
+  set_names(df_single_marker_Morph$Serum) %>%
+  ## nuclear morphology feature
+  map(.f = ~ set_names(.x, c("Area","ASP","SF"))) %>%
+  list_flatten()
+
+# remove faceting in FS and SS only plots
+Morph_plots[1:6] <- Morph_plots[1:6] %>%
+  map(~ .x + facet_grid())
+
+# print
+Morph_plots
+
+```
+
 
 # Fig 1
 
-```{r Fig 1 data panels: SABGal_EdU ICC, fig.asp=1.33, include=TRUE}
+```{r Fig 1 data panels: SABGal_EdU ICC, fig.asp=1.33, eval=FALSE}
 
 layout1 <- "
 AD
@@ -1338,7 +1882,7 @@ Workflow <- ggplot() +
 ```
 
 
-```{r Fig1, include=TRUE, fig.asp=1.33}
+```{r Fig1, include=TRUE, fig.asp=1.33, eval=FALSE}
 
 layout <- "
 AAAAAAAAAAAA
@@ -1365,6 +1909,8 @@ theme_Fig1 <- theme(axis.title = element_text(size = 10),
         strip.text = element_text(size = 8)
         )
 
+# all datapoints
+
 Figure1_summary_allds <- ggplot()+theme_void() +
   grid_SABGal_EdU_FS +
   panel_SABGal_EdU_data$summary_all_datasets +
@@ -1377,6 +1923,8 @@ Figure1_summary_allds <- ggplot()+theme_void() +
   plot_layout(design = layout_summary_allds) +
   plot_annotation(tag_levels = "a") &
   theme_Fig1
+
+# summary with split based on dataset
 
 Figure1_summary <- ggplot()+theme_void() +
   grid_SABGal_EdU_FS +
@@ -1392,6 +1940,8 @@ Figure1_summary <- ggplot()+theme_void() +
   plot_annotation(tag_levels = "a") &
   theme_Fig1
 
+# summary
+
 Figure1_alldp <- ggplot()+theme_void() +
   grid_SABGal_EdU_FS +
   panel_SABGal_EdU_data$all_datapoints +
@@ -1406,16 +1956,225 @@ Figure1_alldp <- ggplot()+theme_void() +
   plot_annotation(tag_levels = "a") &
   theme_Fig1
 
+# Figure1_1marker
+
+layout_1marker <- "
+AAAAAAAAAAAA
+BBBBBBCCCCCC
+DDDDDDEEEEEE
+DDDDDDEEEEEE
+FFFFFFFFFFFF
+"
+theme_Fig1_1marker <- theme(
+  plot.title = element_text(size = 10),
+  axis.title = element_text(size = 9),
+  axis.text = element_text(size = 7.5),
+  legend.title = element_blank(),
+  legend.text = element_text(size = 8),
+  legend.key.size = unit(0.35, "cm"),
+  legend.spacing.y = unit(0.3, "cm"),
+  legend.spacing.x = unit(0.1, "cm"),
+  strip.text = element_text(size = 8)
+  )
+
+Figure1_1marker <- ggplot()+theme_void() +
+  free(grid_SABGal_EdU_FS) +
+  ((SABGal_EdU_plots$FS_SABGal + SABGal_EdU_plots$FS_EdU + plot_layout(guides = "collect"))) +
+  free(grid_ICC_Morph_FS) +
+  (
+    (ICC_yH2AX$FS_yH2AX | ICC_2ndMarkers$FS_p21) /
+      (ICC_2ndMarkers$FS_LaminB1 | ICC_2ndMarkers$FS_HMGB1) +
+      plot_layout(guides = "collect")
+  ) +
+  (
+    Morph_plots$FS_Area + theme_morph +
+      Morph_plots$FS_ASP + theme_morph +
+      Morph_plots$FS_SF + theme_morph +
+      plot_layout(guides = "collect")
+  ) +
+  plot_layout(design = layout_1marker) +
+  plot_annotation(tag_levels = "a") &
+  theme_Fig1_1marker
+
+Figure1_1marker
+
+# Figure1_v2
+layout_Figure1_v2 <-"
+AAAAAAAAAAAA
+BBBCCCCCCCCC
+DDEEEEEEEFFF
+DDEEEEEEEFFF
+DDEEEEEEEFFF
+"
+
+theme_Figure1_v2 <- theme(
+  plot.title = element_text(size = 10),
+  axis.title = element_text(size = 9),
+  axis.text = element_text(size = 7.5),
+  axis.text.x = element_text(size = 7.5, angle = 30, hjust = 1),
+  legend.title = element_blank(),
+  legend.text = element_text(size = 8),
+  legend.key.size = unit(0.35, "cm"),
+  legend.spacing.y = unit(0.3, "cm"),
+  legend.spacing.x = unit(0.1, "cm"),
+  legend.position = "top",
+  strip.text = element_text(size = 8)
+  )
+
+Figure1_v2 <- ggplot()+theme_void() + 
+  free(grid_SABGal_EdU_FS) + free(grid_ICC_Morph_FS) +
+  ((SABGal_EdU_plots$FS_SABGal / SABGal_EdU_plots$FS_EdU)) +
+  (
+    (ICC_yH2AX$FS_yH2AX | ICC_2ndMarkers$FS_p21) /
+      (ICC_2ndMarkers$FS_LaminB1 | ICC_2ndMarkers$FS_HMGB1)
+  ) +
+  (
+    Morph_plots$FS_Area / Morph_plots$FS_ASP / Morph_plots$FS_SF
+  ) + theme(axis.title.x = element_blank()) +
+  plot_layout(design = layout_Figure1_v2,
+              guides = "collect") +
+  plot_annotation(tag_levels = "a") &
+  theme_Figure1_v2
+
+# adjust x axis text for grids
+Figure1_v2[[2]] <- Figure1_v2[[2]] + theme(axis.text.x = element_text(size = 7.5,
+                                                                      angle = 0,
+                                                                      hjust = 0.5))
+Figure1_v2[[3]] <- Figure1_v2[[3]] + theme(axis.text.x = element_text(size = 7.5,
+                                                                      angle = 0,
+                                                                      hjust = 0.5))
+Figure1_v2
+
+Figure1_v2_SS <- ggplot()+theme_void() + 
+  free(grid_SABGal_EdU_FS) + free(grid_ICC_Morph_FS) +
+  ((SABGal_EdU_plots$SS_SABGal / SABGal_EdU_plots$SS_EdU)) +
+  (
+    (ICC_yH2AX$SS_yH2AX | ICC_2ndMarkers$SS_p21) /
+      (ICC_2ndMarkers$SS_LaminB1 | ICC_2ndMarkers$SS_HMGB1)
+  ) +
+  (
+    Morph_plots$SS_Area / Morph_plots$SS_ASP / Morph_plots$SS_SF
+  ) + theme(axis.title.x = element_blank()) +
+  plot_layout(design = layout_Figure1_v2,
+              guides = "collect") +
+  plot_annotation(tag_levels = "a") &
+  theme_Figure1_v2
+
+# adjust x axis text for grids
+Figure1_v2_SS[[2]] <- Figure1_v2_SS[[2]] + theme(axis.text.x = element_text(size = 7.5,
+                                                                      angle = 0,
+                                                                      hjust = 0.5))
+Figure1_v2_SS[[3]] <- Figure1_v2_SS[[3]] + theme(axis.text.x = element_text(size = 7.5,
+                                                                      angle = 0,
+                                                                      hjust = 0.5))
+Figure1_v2_SS
+
+
 Figure1 <- list(
   "Figure1_summary_allds" = Figure1_summary_allds,
   "Figure1_summary" = Figure1_summary,
   "Figure1_alldp" = Figure1_alldp
-  
 )
 
-Figure1
+# Figure1
 
 ```
+
+```{r Fig Population Data, include=TRUE, fig.asp=1.33}
+
+# images
+Panel_Representative_Images <- ggplot() + theme_void()
+
+# SABGal & EdU
+Panel_SABGal_EdU <- SABGal_EdU_plots$FS_SABGal / SABGal_EdU_plots$FS_EdU
+
+# ICC
+Panel_ICC <- ICC_yH2AX$FS_yH2AX + ICC_2ndMarkers$FS_p21 +
+  ICC_2ndMarkers$FS_LaminB1 + ICC_2ndMarkers$FS_HMGB1 +
+  plot_layout(nrow = 2)
+
+# Morph
+Panel_Morphology <- Morph_plots$FS_Area / Morph_plots$FS_ASP
+
+# Patchwork v1
+layout1 <- "
+AAAA
+BCCD
+BCCD
+"
+Fig_PopData_v6.1 <- Panel_Representative_Images +
+      (Panel_SABGal_EdU + plot_layout(tag_level = 'new')) +
+      (Panel_ICC + plot_layout(tag_level = "new")) +
+      (Panel_Morphology + plot_layout(tag_level = "new")) +
+  plot_layout(design = layout1,
+              guides = "collect") +
+  plot_annotation(tag_level = list("a", c(""))) &
+  theme(legend.position = "top")
+
+# remove extra tags
+## SABGal EdU
+Fig_PopData_v6.1[[2]][[2]] <- Fig_PopData_v6.1[[2]][[2]] + theme(plot.tag = element_blank())
+## ICC
+Fig_PopData_v6.1[[3]][[2]] <- Fig_PopData_v6.1[[3]][[2]] + theme(plot.tag = element_blank())
+Fig_PopData_v6.1[[3]][[3]] <- Fig_PopData_v6.1[[3]][[3]] + theme(plot.tag = element_blank())
+Fig_PopData_v6.1[[3]][[4]] <- Fig_PopData_v6.1[[3]][[4]] + theme(plot.tag = element_blank())
+## Morphology
+Fig_PopData_v6.1[[4]][[2]] <- Fig_PopData_v6.1[[4]][[2]] + theme(plot.tag = element_blank())
+
+Fig_PopData_v6.1
+
+# Patchwork v2
+layout2 <- "
+AAAA
+BCDE
+BCDE
+FGHI
+FGHI
+"
+Fig_PopData_v6.2 <- Panel_Representative_Images +
+  SABGal_EdU_plots$FS_SABGal + ICC_yH2AX$FS_yH2AX + ICC_2ndMarkers$FS_p21 + Morph_plots$FS_Area +
+  SABGal_EdU_plots$FS_EdU + ICC_2ndMarkers$FS_LaminB1 + ICC_2ndMarkers$FS_HMGB1 + Morph_plots$FS_SF +
+  plot_layout(design = layout2,
+              guides = "collect") +
+  plot_annotation(tag_levels = list(c("a", "b", "c", "", "d", "", "", "", "", ""))) &
+  theme(plot.title = element_text(size = 10),
+        plot.tag = element_text(size = 16, face = "bold"),
+        legend.position = "top",
+        legend.key.size = unit(0.5, "cm"),
+        axis.title = element_text(size = 10),
+        axis.text = element_text(size = 8),
+        )
+
+Fig_PopData_v6.2
+
+# Patchwork v3
+layout2 <- "
+AAAA
+BCDE
+BCDE
+FGHI
+FGHI
+"
+Fig_PopData_v6.3 <- Panel_Representative_Images +
+  SABGal_EdU_plots$FS_SS_SABGal + ICC_yH2AX$FS_SS_yH2AX + ICC_2ndMarkers$FS_SS_p21 + Morph_plots$FS_SS_Area +
+  SABGal_EdU_plots$FS_SS_EdU + ICC_2ndMarkers$FS_SS_LaminB1 + ICC_2ndMarkers$FS_SS_HMGB1 + Morph_plots$FS_SS_SF +
+  plot_layout(design = layout2,
+              guides = "collect") +
+  plot_annotation(tag_levels = list(c("a", "b", "c", "", "d", "", "", "", "", ""))) &
+  theme(plot.title = element_text(size = 10),
+        plot.tag = element_text(size = 16, face = "bold"),
+        legend.position = "top",
+        legend.key.size = unit(0.5, "cm"),
+        axis.title = element_text(size = 10),
+        axis.text = element_text(size = 8),
+        axis.text.x = element_text(size = 8, angle = 30, hjust = 1),
+        strip.text = element_text(size = 10)
+        )
+
+Fig_PopData_v6.3
+
+```
+
 
 **Fig. 1 Senescence Validation and Population-Level Analysis**. **a**) Workflow for high-content image analysis of senescent cells. Primary human lung HMVEC-L endothelial cells and IMM-90 fibroblasts were mock treated (CTL) or induced to senescence using ionizing radiation (SEN). For both cell types, microplates were co-stained for senescence-associated markers (SA-B-Gal and EdU, or $\gamma$H2AX and LaminB1, HMBG1, or p21.  **b**) Representative images of primary human lung HMVEC-L endothelial cells and IMR-90 fibroblasts induced to senescence via ionizing radiation (IR) and mock-treated non-senescent controls (CTL). Cells were either cultured always in full serum (FS) or cultured in full serum until three days before sample collection and then switched to serum-starved conditions (SS). Samples were stained for the senescence-associated markers SA-$\beta$-Gal and EdU. **c**) Quantification of (a), showing percentages of SA-$\beta$-Gal- and EdU-positive cells per well (mean ± SD, n = 9). **d**) Representative ICC images of HMVEC-L and IMR-90 stained for $\gamma$H2AX in combination with other senescence-associated markers: HMGB1, Lamin B1, or p21.**e**) Quantification of (c), showing the relative changes in senescence markers expression between IR and CTL cells (mean fold change ± SD, n = 4). **f-h**) Quantification of nuclear morphological features: nuclear area (e), aspect ratio (ASP, f), and shape factor (SF) (mean ± SD, n = 12).
 
@@ -1424,7 +2183,7 @@ Figure1
 # pdf
 save_pdf <- function(figure, name) {
   
-  pdf(paste0("Population-Analysis_",name,"_", Sys.Date(), ".pdf"),
+  pdf(paste0("inst/figures/Population-Analysis_",name,"_", Sys.Date(), ".pdf"),
     width = 7.5,
     height = 10,
     family = "sans",
@@ -1443,7 +2202,7 @@ pmap(list(Figure1,
 
 # png
 save_png <- function(figure, name) {
-  png(paste0("Population-Analysis_",name,"_", Sys.Date(), ".png"),
+  png(paste0("inst/figures/",name,"_", Sys.Date(), ".png"),
     width = 7.5,
     height = 10,
     units = "in",
@@ -1460,6 +2219,10 @@ pmap(list("figure" = Figure1,
           "name" = c("summary_allds", "summary", "alldp")
           ),
     save_png)
+
+save_png(Fig_PopData_v6.2, "Fig_PopData_v6.2")
+
+
 
 ```
 
