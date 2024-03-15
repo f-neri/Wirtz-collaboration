@@ -26,7 +26,7 @@ Data on functional comparison between G1-enriched vs non-enriched senescent endo
 
 The comparison entailed 1) checking survival to ABT263/Navitoclax treatment; 2) measuring IL6 protein secretion in the conditioned medium.
 
-```{r tidy_IAoutput, include = FALSE}
+```{r tidy_IAoutput}
 
 # adjust IA output excel file to have tidy format
 tidy_IAoutput <- function(data,
@@ -35,18 +35,18 @@ tidy_IAoutput <- function(data,
   
   IAoutput <- data
   
-  # change Plot_Name/Name column name to well
+  # change Plot_Name/Name column name to Well
   IAoutput <- if ( any(colnames(IAoutput) %in% "Plot Name") ) {
-    IAoutput %>% dplyr::rename(well = "Plot Name")
+    IAoutput %>% dplyr::rename(Well = "Plot Name")
   } else {
-    IAoutput %>% dplyr::rename(well = Name)
+    IAoutput %>% dplyr::rename(Well = Name)
   }
   
   # remove extra columns
   
-  ## the pattern looks for "well", "Channel", or "OBJ" followed by any number
+  ## the pattern looks for "Well", "Channel", or "OBJ" followed by any number
   ## the regular expression is case insensitive, indicated by (?i)
-  pattern_to_keep <- "^(?i)(well|Channel|OBJ[0-9]*)$"
+  pattern_to_keep <- "^(?i)(Well|Channel|OBJ[0-9]*)$"
   
   cols_to_keep <- grepl(pattern_to_keep, names(IAoutput))
   
@@ -69,11 +69,11 @@ tidy_IAoutput <- function(data,
       .default = NA)
     )
   
-  # adjust well column values - extract first letter followed by 2 digits
+  # adjust Well column values - extract first letter followed by 2 digits
   
   tidy_data1 <- tidy_data1 %>%
-    dplyr::mutate(well = stringr::str_extract(.data$well, "[A-Za-z]\\d{2}")) %>%
-    dplyr::select(.data$well, .data$cell_ID, dplyr::everything()) # rearrange column order
+    dplyr::mutate(Well = stringr::str_extract(.data$Well, "[A-Za-z]\\d{2}")) %>%
+    dplyr::select(.data$Well, .data$cell_ID, dplyr::everything()) # rearrange column order
   
   # pivot_wider()
   
@@ -87,17 +87,216 @@ tidy_IAoutput <- function(data,
 
 ```
 
+# Load & Check Data
+
+```{r load ABT263 data}
+
+# Generate file paths
+Paths <- tibble(
+  Dataset = factor(c("FN048.01","FN048.02","FN048.03"))
+) %>%
+  mutate(
+    Folder_Path = paste0("inst/extdata/",Dataset),
+    File_Name = list(paste0("IAoutput_", c("P1-ABT263","P2-ABT263")))
+  ) %>%
+  unnest(File_Name) %>%
+  mutate(
+    Complete_Path = file.path(Folder_Path, File_Name) %>%
+      paste0(., ".xlsx")
+  )
+
+# Load ABT263 data
+df_ATB263 <- Paths %>%
+  mutate(
+    # read IAoutput
+    Data = map(Complete_Path, ~ readxl::read_xlsx(path = .x, skip = 1, na = "NA") %>%
+                 # tidy IAoutput
+                 tidy_IAoutput(.)),
+    # Load metadata
+    Metadata_Path = Complete_Path %>%
+      str_replace_all(.,
+                      pattern = ".xlsx",
+                      replacement = "_metadata.csv"),
+    Metadata = map(Metadata_Path,
+                   ~ plater::read_plate(file = .x,
+                                        well_ids_column = "Well")
+                   ),
+    # Remove Variable3 empty col
+    Metadata = map(Metadata,
+                   ~ select(.x, -Variable3)),
+    # Add metadata to data
+    Data = pmap(
+      list(Data,
+           Metadata),
+      ~ left_join(.x,.y)
+    )
+    ) %>%
+  # Combine P1 and P2 data
+  group_by(Dataset) %>%
+  summarise(
+    Data_ABT263 = list(bind_rows(Data)),
+    .groups = "drop"
+  )
+
+df_ATB263
+df_ATB263$Data_ABT263
+
+```
+
+```{r  load IL6 data}
+
+# Load IL6 data
+Paths <- Paths %>%
+  # Dataset and Folder Path
+  group_by(Dataset,Folder_Path) %>%
+  nest() %>%
+  ungroup() %>%
+  select(-data) %>%
+  # Add File Name
+  left_join(
+    .,
+    expand(.,
+       Dataset,
+       File_Name = c("IAoutput_P3-IL6.xlsx", "IAoutput_P3-IL6_metadata.csv", "IL6-ELISA.csv"))
+  ) %>%
+  mutate(
+    Complete_Path = file.path(Folder_Path,File_Name)
+  )
+
+df_IL6 <- Paths %>%
+  # TEMPORARY: Filter for FN48.1
+  filter(Dataset == "FN048.01") %>%
+  mutate(
+    Data = map(
+      Complete_Path,
+      ~ if (str_ends(.x, pattern = ".xlsx")) {
+        # Read IAoutput files (cell count data)
+        readxl::read_xlsx(.x, skip = 1, na = "NA") %>%
+          # tidy IAoutput
+          tidy_IAoutput(.)
+      } else {
+        plater::read_plate(.x, well_ids_column = "Well")
+      }
+    )
+  ) %>%
+  # remove paths to simplify tibble
+  select(Dataset, File_Name, Data)
+
+```
+
+```{r merge IL6 IAoutput w metadata}
+
+df_cell_counts <- df_IL6 %>%
+  # keep only IAoutput and metadata files
+  filter(File_Name != "IL6-ELISA.csv") %>%
+  pivot_wider(names_from = File_Name,
+              values_from = Data) %>%
+  # add metadata to data
+  mutate(
+    Cell_Count_Data = pmap(
+      list(`IAoutput_P3-IL6.xlsx`, `IAoutput_P3-IL6_metadata.csv`),
+      left_join
+    )
+  ) %>%
+  # keep only full data
+  select(Dataset, Cell_Count_Data)
+
+```
+
+
+```{r plot IL6 cell counts per well}
+
+df_cell_counts %>%
+  # calculate cell counts by well
+  mutate(
+    Cell_Count_Data = map(
+      Cell_Count_Data,
+    ~ .x %>%
+        group_by(Condition,Well) %>%
+        summarise(Cell_Count = n()) %>%
+        ungroup()
+    )
+  ) %>%
+  # plot
+  pmap(
+    .,
+    function(Cell_Count_Data, Dataset) {
+      ggplot(Cell_Count_Data) +
+             geom_point(aes(x = Condition,
+                            y = Cell_Count,
+                            fill = Condition),
+                        shape = 21,
+                        color = "black") +
+        labs(title = Dataset)
+    }
+  )
+
+```
+
+```{r Data_IL6}
+
+df_ELISA <- df_IL6 %>%
+    # keep only IL6-ELISA data
+    filter(File_Name == "IL6-ELISA.csv") %>%
+    # calculate mean luminescence from ELISA
+    mutate(
+      ELISA_Data = map(
+        Data,
+        ~ .x %>%
+          group_by(Condition, Sample) %>%
+          summarise(Luminescence = mean(Luminescence),
+                    # Carry over the Concentration col as well
+                    Concentration = mean(Concentration)
+                    ) %>%
+          ungroup()
+      )
+    ) %>%
+  # remove unnecessary cols
+  select(-c(Data,File_Name))
+
+Data_IL6 <- df_cell_counts %>%
+  # Calculate cell counts for each Sample in all Conditions
+  mutate(
+    Cell_Count_Data = map(
+      Cell_Count_Data,
+      ~ .x %>%
+        group_by(Condition, Sample) %>%
+        summarise(Cell_Count = n()) %>%
+        ungroup()
+        )
+    ) %>%
+  # Add cell counts to ELISA data
+  left_join(
+    df_ELISA,
+    .
+  ) %>%
+  mutate(
+    Data = pmap(
+      list(ELISA_Data, Cell_Count_Data),
+      left_join
+    )
+  ) %>%
+  # simplify df
+  select(Dataset, Data)
+
+```
+
+# IL6 expression
+
+Regress IL6 concentration
+- subtract blank
+- calculate linear model
+- regress out IL6 concentrations
+- normalize to cell counts
+
+## plot
+
+# ABT263 susceptibility
+
+## plot
+
 
 ```{r load IAoutput files and metadata, include=FALSE}
-
-# Load imaging data
-df <- tibble(
-  Dataset = c("FN048.01","FN048.02","FN048.03")
-) %>%
-  # load IAoutput files
-  mutate(
-    # paths
-  ) %>%
   
   # load metadata files
   # unite IAoutput with metadata
@@ -140,12 +339,12 @@ metadata_dfs <- vector(mode = "list", length = length(metadata_datapaths))
 
 for (i in seq_along(metadata_dfs)) {
   metadata_dfs[[i]] <- plater::read_plate(file = metadata_datapaths[i],
-                                                           well_ids_column = "well",    # name to give column of well IDs
+                                                           well_ids_column = "Well",    # name to give column of Well IDs
                                                            sep = ",") %>%               # separator used in the csv file
           dplyr::select(dplyr::where(~ !all(is.na(.x)))) # remove columns whose values are all NA
   
   # convert variables to factors
-  cols_to_factor <- setdiff(names(metadata_dfs[[i]]), "well") # Identify all columns except 'well'
+  cols_to_factor <- setdiff(names(metadata_dfs[[i]]), "Well") # Identify all columns except 'Well'
   metadata_dfs[[i]][cols_to_factor] <- lapply(metadata_dfs[[i]][cols_to_factor], as.factor)
 
 }
@@ -172,11 +371,11 @@ for (i in seq_len(nrow(Input_files))) {
   df <- dplyr::left_join(tidied_IAoutput, Input_files$metadata_dfs[[i]])
   
   # add plate identifier (i.e. file name) and rearrange column names
-  variable_names <- names(Input_files$metadata_dfs[[i]])[-(names(Input_files$metadata_dfs[[i]]) == "well")]
+  variable_names <- names(Input_files$metadata_dfs[[i]])[-(names(Input_files$metadata_dfs[[i]]) == "Well")]
   
   df <- df %>%
     dplyr::mutate(plate = Input_files$plate_names[i]) %>% # add plate name
-    dplyr::select(.data$plate, .data$well, .data$cell_ID, dplyr::all_of(variable_names), dplyr::everything()) # rearrange
+    dplyr::select(.data$plate, .data$Well, .data$cell_ID, dplyr::all_of(variable_names), dplyr::everything()) # rearrange
   
   # return df
   Input_files$tidy_df[[i]] <- df
@@ -267,11 +466,11 @@ df_ABT263_no_dead <- df_ABT263 %>%
 
 calculate_percentage <- function(data) {
   data %>%
-  group_by(plate, Condition, ABT263, well, DNA_content) %>%
+  group_by(plate, Condition, ABT263, Well, DNA_content) %>%
   summarise(
     cell_count = n()
   ) %>%
-  group_by(plate, well) %>%
+  group_by(plate, Well) %>%
   mutate(tot_cell_count = sum(cell_count),
          percentage = cell_count / tot_cell_count) %>%
   ungroup()
