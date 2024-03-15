@@ -706,8 +706,8 @@ plot_single_marker <- function(data, y, ylab, title, test_results, ymax_multipli
           ),
       size = 3, vjust = -0.5
     ) +
-    facet_grid(Serum ~ .) +
-    coord_cartesian(ylim = c(NA, test_results$ymax %>% max(.) * (ymax_multiplier + 0.1))) +
+    facet_grid(. ~ Serum) +
+    coord_cartesian(ylim = c(NA, test_results$ymax %>% max(.) * (ymax_multiplier + 0.2))) +
     scale_color_manual(values = palette) +
     scale_fill_manual(values = palette) +
     labs(title = title,
@@ -1420,7 +1420,7 @@ ICC_yH2AX
 map_arg <- df_ICC_Morph_Serum_2ndMarker %>%
   mutate(
     # generate ylab labels
-    ylab = "Intensity (AU)",
+    ylab = "Mean Intensity (AU)",
     title = Channel3
   ) %>%
   # keep only cols to be used as fun arguments
@@ -1749,25 +1749,23 @@ df_single_marker_Morph
 
 ```{r stats single marker morph}
 
-# Compare IR vs CTL samples for yH2AX
-single_marker_Morph_test_results <- df_single_marker_Morph %>%
+original_df <- df_single_marker_Morph %>%
   # select df with both FS and SS
   filter(Serum == "FS_SS") %>%
   .$data %>%
-  .[[1]] %>%
+  .[[1]]
+
+# Compare IR vs CTL samples for yH2AX
+single_marker_Morph_test_results <- original_df %>%
   # calculate adj-pvalues
   calculate_test_results(
-  variables = c("Narea_overall", "NSF_overall"),
+  variables = c("Narea_overall", "NASP_overall", "NSF_overall"),
   grouping = c("Serum", "Cell.Type")
   ) %>%
   # calculate x:y coordinates for stat annotations
   calculate_annotation_position(
     test_results_df = .,
-    original_df = df_single_marker_Morph %>%
-      # select df with both FS and SS
-      filter(Serum == "FS_SS") %>%
-      .$data %>%
-      .[[1]],
+    original_df = original_df,
     grouping = c("Serum", "Cell.Type")
   )
 
@@ -2082,96 +2080,129 @@ Figure1 <- list(
 
 ```{r Fig Population Data, include=TRUE, fig.asp=1.33}
 
-# images
 Panel_Representative_Images <- ggplot() + theme_void()
 
-# SABGal & EdU
-Panel_SABGal_EdU <- SABGal_EdU_plots$FS_SABGal / SABGal_EdU_plots$FS_EdU
+# # Patchwork v1
+# ## SABGal & EdU
+# Panel_SABGal_EdU <- SABGal_EdU_plots$FS_SABGal / SABGal_EdU_plots$FS_EdU
+# 
+# ## ICC
+# Panel_ICC <- ICC_yH2AX$FS_yH2AX + ICC_2ndMarkers$FS_p21 +
+#   ICC_2ndMarkers$FS_LaminB1 + ICC_2ndMarkers$FS_HMGB1 +
+#   plot_layout(nrow = 2)
+# 
+# ## Morph
+# Panel_Morphology <- Morph_plots$FS_Area / Morph_plots$FS_ASP
+# 
+# layout1 <- "
+# AAAA
+# BCCD
+# BCCD
+# "
+# Fig_PopData_v6.1 <- Panel_Representative_Images +
+#       (Panel_SABGal_EdU + plot_layout(tag_level = 'new')) +
+#       (Panel_ICC + plot_layout(tag_level = "new")) +
+#       (Panel_Morphology + plot_layout(tag_level = "new")) +
+#   plot_layout(design = layout1,
+#               guides = "collect") +
+#   plot_annotation(tag_level = list("a", c(""))) &
+#   theme(legend.position = "top")
+# 
+# ## remove extra tags
+# ### SABGal EdU
+# Fig_PopData_v6.1[[2]][[2]] <- Fig_PopData_v6.1[[2]][[2]] + theme(plot.tag = element_blank())
+# ### ICC
+# Fig_PopData_v6.1[[3]][[2]] <- Fig_PopData_v6.1[[3]][[2]] + theme(plot.tag = element_blank())
+# Fig_PopData_v6.1[[3]][[3]] <- Fig_PopData_v6.1[[3]][[3]] + theme(plot.tag = element_blank())
+# Fig_PopData_v6.1[[3]][[4]] <- Fig_PopData_v6.1[[3]][[4]] + theme(plot.tag = element_blank())
+# ### Morphology
+# Fig_PopData_v6.1[[4]][[2]] <- Fig_PopData_v6.1[[4]][[2]] + theme(plot.tag = element_blank())
+# 
+# Fig_PopData_v6.1
 
-# ICC
-Panel_ICC <- ICC_yH2AX$FS_yH2AX + ICC_2ndMarkers$FS_p21 +
-  ICC_2ndMarkers$FS_LaminB1 + ICC_2ndMarkers$FS_HMGB1 +
-  plot_layout(nrow = 2)
+# # Patchwork v2
+# layout2 <- "
+# AAAA
+# BCDE
+# BCDE
+# FGHI
+# FGHI
+# "
+# Fig_PopData_v6.2 <- Panel_Representative_Images +
+#   SABGal_EdU_plots$FS_SABGal + ICC_yH2AX$FS_yH2AX + ICC_2ndMarkers$FS_p21 + Morph_plots$FS_Area +
+#   SABGal_EdU_plots$FS_EdU + ICC_2ndMarkers$FS_LaminB1 + ICC_2ndMarkers$FS_HMGB1 + Morph_plots$FS_SF +
+#   plot_layout(design = layout2,
+#               guides = "collect") +
+#   plot_annotation(tag_levels = list(c("a", "b", "c", "", "d", "", "", "", "", ""))) &
+#   theme(plot.title = element_text(size = 10),
+#         plot.tag = element_text(size = 16, face = "bold"),
+#         legend.position = "top",
+#         legend.key.size = unit(0.5, "cm"),
+#         axis.title = element_text(size = 10),
+#         axis.text = element_text(size = 8),
+#         )
+# 
+# Fig_PopData_v6.2
 
-# Morph
-Panel_Morphology <- Morph_plots$FS_Area / Morph_plots$FS_ASP
+# # Patchwork v3
+# layout2 <- "
+# AAAA
+# BCDE
+# BCDE
+# FGHI
+# FGHI
+# "
+# Fig_PopData_v6.3 <- Panel_Representative_Images +
+#   SABGal_EdU_plots$FS_SS_SABGal + ICC_yH2AX$FS_SS_yH2AX + ICC_2ndMarkers$FS_SS_p21 + Morph_plots$FS_SS_Area +
+#   SABGal_EdU_plots$FS_SS_EdU + ICC_2ndMarkers$FS_SS_LaminB1 + ICC_2ndMarkers$FS_SS_HMGB1 + Morph_plots$FS_SS_SF + coord_cartesian(ylim = c(0.6,1.2)) +
+#   plot_layout(design = layout2,
+#               guides = "collect") +
+#   plot_annotation(tag_levels = list(c("a", "b", "c", "", "d", "", "", "", "", ""))) &
+#   theme(plot.title = element_text(size = 10),
+#         plot.tag = element_text(size = 16, face = "bold"),
+#         legend.position = "top",
+#         legend.key.size = unit(0.5, "cm"),
+#         axis.title = element_text(size = 10),
+#         axis.text = element_text(size = 8),
+#         axis.text.x = element_text(size = 8, angle = 30, hjust = 1),
+#         strip.text = element_text(size = 10)
+#         )
+# 
+# Fig_PopData_v6.3
 
-# Patchwork v1
-layout1 <- "
-AAAA
-BCCD
-BCCD
+# Patchwork v4
+layout4 <- "
+AA
+AA
+AA
+BC
+BC
+DE
+DE
+FG
+FG
+HI
+HI
 "
-Fig_PopData_v6.1 <- Panel_Representative_Images +
-      (Panel_SABGal_EdU + plot_layout(tag_level = 'new')) +
-      (Panel_ICC + plot_layout(tag_level = "new")) +
-      (Panel_Morphology + plot_layout(tag_level = "new")) +
-  plot_layout(design = layout1,
+Fig_PopData_v6.4 <- Panel_Representative_Images +
+  SABGal_EdU_plots$FS_SS_SABGal + SABGal_EdU_plots$FS_SS_EdU +
+  ICC_yH2AX$FS_SS_yH2AX + ICC_2ndMarkers$FS_SS_p21 +
+  ICC_2ndMarkers$FS_SS_LaminB1 + ICC_2ndMarkers$FS_SS_HMGB1 +
+  Morph_plots$FS_SS_Area + Morph_plots$FS_SS_SF + coord_cartesian(ylim = c(0.6,1.2)) +
+  plot_layout(design = layout4,
               guides = "collect") +
-  plot_annotation(tag_level = list("a", c(""))) &
-  theme(legend.position = "top")
-
-# remove extra tags
-## SABGal EdU
-Fig_PopData_v6.1[[2]][[2]] <- Fig_PopData_v6.1[[2]][[2]] + theme(plot.tag = element_blank())
-## ICC
-Fig_PopData_v6.1[[3]][[2]] <- Fig_PopData_v6.1[[3]][[2]] + theme(plot.tag = element_blank())
-Fig_PopData_v6.1[[3]][[3]] <- Fig_PopData_v6.1[[3]][[3]] + theme(plot.tag = element_blank())
-Fig_PopData_v6.1[[3]][[4]] <- Fig_PopData_v6.1[[3]][[4]] + theme(plot.tag = element_blank())
-## Morphology
-Fig_PopData_v6.1[[4]][[2]] <- Fig_PopData_v6.1[[4]][[2]] + theme(plot.tag = element_blank())
-
-Fig_PopData_v6.1
-
-# Patchwork v2
-layout2 <- "
-AAAA
-BCDE
-BCDE
-FGHI
-FGHI
-"
-Fig_PopData_v6.2 <- Panel_Representative_Images +
-  SABGal_EdU_plots$FS_SABGal + ICC_yH2AX$FS_yH2AX + ICC_2ndMarkers$FS_p21 + Morph_plots$FS_Area +
-  SABGal_EdU_plots$FS_EdU + ICC_2ndMarkers$FS_LaminB1 + ICC_2ndMarkers$FS_HMGB1 + Morph_plots$FS_SF +
-  plot_layout(design = layout2,
-              guides = "collect") +
-  plot_annotation(tag_levels = list(c("a", "b", "c", "", "d", "", "", "", "", ""))) &
+  plot_annotation(tag_levels = list(c("a", "b", "", "c", "", "", "", "d", ""))) &
   theme(plot.title = element_text(size = 10),
-        plot.tag = element_text(size = 16, face = "bold"),
+        plot.tag = element_text(size = 12, face = "bold"),
         legend.position = "top",
         legend.key.size = unit(0.5, "cm"),
         axis.title = element_text(size = 10),
         axis.text = element_text(size = 8),
+        axis.text.x = element_text(size = 8),
+        strip.text = element_text(size = 8)
         )
 
-Fig_PopData_v6.2
-
-# Patchwork v3
-layout2 <- "
-AAAA
-BCDE
-BCDE
-FGHI
-FGHI
-"
-Fig_PopData_v6.3 <- Panel_Representative_Images +
-  SABGal_EdU_plots$FS_SS_SABGal + ICC_yH2AX$FS_SS_yH2AX + ICC_2ndMarkers$FS_SS_p21 + Morph_plots$FS_SS_Area +
-  SABGal_EdU_plots$FS_SS_EdU + ICC_2ndMarkers$FS_SS_LaminB1 + ICC_2ndMarkers$FS_SS_HMGB1 + Morph_plots$FS_SS_SF +
-  plot_layout(design = layout2,
-              guides = "collect") +
-  plot_annotation(tag_levels = list(c("a", "b", "c", "", "d", "", "", "", "", ""))) &
-  theme(plot.title = element_text(size = 10),
-        plot.tag = element_text(size = 16, face = "bold"),
-        legend.position = "top",
-        legend.key.size = unit(0.5, "cm"),
-        axis.title = element_text(size = 10),
-        axis.text = element_text(size = 8),
-        axis.text.x = element_text(size = 8, angle = 30, hjust = 1),
-        strip.text = element_text(size = 10)
-        )
-
-Fig_PopData_v6.3
+Fig_PopData_v6.4
 
 ```
 
@@ -2221,8 +2252,7 @@ pmap(list("figure" = Figure1,
     save_png)
 
 save_png(Fig_PopData_v6.2, "Fig_PopData_v6.2")
-
-
+save_png(Fig_PopData_v6.4, "Fig_PopData_v6.4")
 
 ```
 
