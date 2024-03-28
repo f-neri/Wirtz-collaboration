@@ -657,7 +657,6 @@ plot_single_marker <- function(data, y, ylab, title, test_results, ymax_multipli
        test_results <- test_results %>%
          filter(Channel3 %in% unique(data$Channel3))
     }
-    
   
   # calculate absolute value to nudge ymax by
   ymax_nudge <- test_results %>%
@@ -671,10 +670,10 @@ plot_single_marker <- function(data, y, ylab, title, test_results, ymax_multipli
     .$ymax_nudge
 
   # plot
-  ggplot(data,
-         aes(y = !!sym(y),
-             x = Cell.Type)
-         ) +
+  p <- ggplot(data,
+              aes(y = !!sym(y),
+              x = Cell.Type)
+              ) +
     geom_col(data = summary_data,
              aes(x = Cell.Type,
                  y = median,
@@ -715,6 +714,21 @@ plot_single_marker <- function(data, y, ylab, title, test_results, ymax_multipli
     guides(color = guide_legend(override.aes = list(shape=21))) +
     theme(plot.title = element_text(hjust = 0.5),
           axis.title.x = element_blank())
+  
+  # print plot
+  p
+  
+  # # adjust background colors of facets
+  # g <- ggplot_gtable(ggplot_build(p))
+  # strip_both <- which(grepl('strip-', g$layout$name))
+  # fills <- c("#FFF380","#FFFFC2")
+  # k <- 1
+  # for (i in strip_both) {
+  # j <- which(grepl('rect', g$grobs[[i]]$grobs[[1]]$childrenOrder))
+  # g$grobs[[i]]$grobs[[1]]$children[[j]]$gp$fill <- fills[k]
+  # k <- k+1
+  # }
+  # grid.draw(g)
 }
 
 ```
@@ -2170,8 +2184,44 @@ Panel_Representative_Images <- ggplot() + theme_void()
 # 
 # Fig_PopData_v6.3
 
+# # Patchwork v4
+# layout4 <- "
+# AA
+# AA
+# AA
+# BC
+# BC
+# DE
+# DE
+# FG
+# FG
+# HI
+# HI
+# "
+# 
+# Fig_PopData_v6.4 <- Panel_Representative_Images +
+#   SABGal_EdU_plots$FS_SS_SABGal + SABGal_EdU_plots$FS_SS_EdU +
+#   ICC_yH2AX$FS_SS_yH2AX + ICC_2ndMarkers$FS_SS_p21 +
+#   ICC_2ndMarkers$FS_SS_LaminB1 + ICC_2ndMarkers$FS_SS_HMGB1 +
+#   Morph_plots$FS_SS_Area + Morph_plots$FS_SS_SF + coord_cartesian(ylim = c(0.6,1.2)) +
+#   plot_layout(design = layout4,
+#               guides = "collect") +
+#   plot_annotation(tag_levels = list(c("a", "b", "", "c", "", "", "", "d", ""))) &
+#   theme(plot.title = element_text(size = 10),
+#         plot.tag = element_text(size = 12, face = "bold"),
+#         legend.position = "top",
+#         legend.key.size = unit(0.5, "cm"),
+#         axis.title = element_text(size = 10),
+#         axis.text = element_text(size = 8),
+#         axis.text.x = element_text(size = 8),
+#         strip.text = element_text(size = 8),
+#         strip.background = element_rect(fill = "white")
+#         )
+# 
+# Fig_PopData_v6.4
+
 # Patchwork v4
-layout4 <- "
+layout5 <- "
 AA
 AA
 AA
@@ -2184,14 +2234,15 @@ FG
 HI
 HI
 "
-Fig_PopData_v6.4 <- Panel_Representative_Images +
+
+Fig_PopData_v6.5 <- Panel_Representative_Images +
   SABGal_EdU_plots$FS_SS_SABGal + SABGal_EdU_plots$FS_SS_EdU +
   ICC_yH2AX$FS_SS_yH2AX + ICC_2ndMarkers$FS_SS_p21 +
   ICC_2ndMarkers$FS_SS_LaminB1 + ICC_2ndMarkers$FS_SS_HMGB1 +
   Morph_plots$FS_SS_Area + Morph_plots$FS_SS_SF + coord_cartesian(ylim = c(0.6,1.2)) +
-  plot_layout(design = layout4,
+  plot_layout(design = layout5,
               guides = "collect") +
-  plot_annotation(tag_levels = list(c("a", "b", "", "c", "", "", "", "d", ""))) &
+  plot_annotation(tag_levels = list(c("", "", "", "", "", "", "", "", ""))) &
   theme(plot.title = element_text(size = 10),
         plot.tag = element_text(size = 12, face = "bold"),
         legend.position = "top",
@@ -2199,10 +2250,11 @@ Fig_PopData_v6.4 <- Panel_Representative_Images +
         axis.title = element_text(size = 10),
         axis.text = element_text(size = 8),
         axis.text.x = element_text(size = 8),
-        strip.text = element_text(size = 8)
+        strip.text = element_text(size = 8),
+        strip.background = element_rect(fill = "white")
         )
 
-Fig_PopData_v6.4
+Fig_PopData_v6.5
 
 ```
 
@@ -2251,8 +2303,8 @@ pmap(list("figure" = Figure1,
           ),
     save_png)
 
-save_png(Fig_PopData_v6.2, "Fig_PopData_v6.2")
-save_png(Fig_PopData_v6.4, "Fig_PopData_v6.4")
+# save_png(Fig_PopData_v6.2, "Fig_PopData_v6.2")
+save_png(Fig_PopData_v6.5, "Fig_PopData_v6.5")
 
 ```
 

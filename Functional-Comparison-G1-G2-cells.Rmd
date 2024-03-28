@@ -19,7 +19,12 @@ library(readxl)
 library(scales)
 library(RColorBrewer)
 library(ggplot2)
+library(broom)
+library(patchwork)
 # library(multcomp) ! I think multcomp masks dplyr::fitler !
+
+# theme_bw
+theme_set(theme_bw())
 ```
 
 Data on functional comparison between G1-enriched vs non-enriched senescent endothelial cells (induction: 15 Gy IR).
@@ -136,10 +141,22 @@ df_ATB263 <- Paths %>%
   summarise(
     Data_ABT263 = list(bind_rows(Data)),
     .groups = "drop"
-  )
-
-df_ATB263
-df_ATB263$Data_ABT263
+  ) %>%
+  mutate(
+    Data_ABT263 = map(
+      Data_ABT263,
+      ~ .x %>%
+        mutate(
+          # remove "µM ABT263" from ABT263 col
+          ABT263 = str_replace_all(ABT263, " µM ABT263", "") %>%
+            # turn ABT263 col into factor
+            factor(.),
+          # change IR-G1 to IR-G1-E
+          Condition = str_replace_all(Condition, "^IR-G1$", 'IR-G1-E')
+        )
+    )
+  ) %>%
+  rename(Data = Data_ABT263)
 
 ```
 
@@ -164,8 +181,6 @@ Paths <- Paths %>%
   )
 
 df_IL6 <- Paths %>%
-  # TEMPORARY: Filter for FN48.1
-  filter(Dataset == "FN048.01") %>%
   mutate(
     Data = map(
       Complete_Path,
@@ -199,12 +214,24 @@ df_cell_counts <- df_IL6 %>%
     )
   ) %>%
   # keep only full data
-  select(Dataset, Cell_Count_Data)
+  select(Dataset, Cell_Count_Data) %>%
+  # adjust Condition names
+  mutate(
+    Cell_Count_Data = map(
+      Cell_Count_Data,
+      ~ .x %>%
+        mutate(
+          # change IR-G1 to IR-G1-E
+          Condition = str_replace_all(Condition, "^IR-G1$", 'IR-G1-E')
+        )
+    )
+  )
 
 ```
 
+# IL6 expression
 
-```{r plot IL6 cell counts per well}
+```{r QC IL6 cell counts per well}
 
 df_cell_counts %>%
   # calculate cell counts by well
@@ -217,7 +244,7 @@ df_cell_counts %>%
         ungroup()
     )
   ) %>%
-  # plot
+  # plot cell counts for QC
   pmap(
     .,
     function(Cell_Count_Data, Dataset) {
@@ -232,6 +259,184 @@ df_cell_counts %>%
   )
 
 ```
+
+## DNA content distribution
+
+```{r set DNA content thresholds IL6}
+
+# manually set tresholds
+df_thresholds <- df_cell_counts %>%
+  rename(Data = Cell_Count_Data) %>%
+  mutate(
+    Dead_Cells_Thr = c(3000000, 2400000, 2500000),
+    G1_G2_Thr = c(9250000, 6000000, 7000000),
+    Too_Large_Cells_Thr = c(19000000, 12000000, 14000000)
+  )
+
+# function
+visualize_thresholds <- function(Data, Dead_Cells_Thr, G1_G2_Thr, Too_Large_Cells_Thr) {
+  # palette
+  palette <- RColorBrewer::brewer.pal(9, "Set1") %>% .[c(3:5)]
+  palette_greys <- seq(0,1,length.out = 30) %>% grey() %>% .[c(24,28)]
+  
+  # plot histogram
+  ggplot(Data) +
+    # G1 background
+    geom_rect(xmin = Dead_Cells_Thr, xmax = G1_G2_Thr,
+              ymin = -Inf, ymax = Inf,
+              fill = palette_greys[2]) +
+    # G2 background
+    geom_rect(xmin = G1_G2_Thr, xmax = Too_Large_Cells_Thr,
+              ymin = -Inf, ymax = Inf,
+              fill = palette_greys[1]) +
+    geom_histogram(
+      aes(x = DAPI,
+          fill = Condition),
+      binwidth = quantile(Data$DAPI, 0.95)/150) +
+    geom_vline(xintercept = Dead_Cells_Thr,
+               color = "red") +
+    geom_vline(xintercept = G1_G2_Thr) +
+    geom_vline(xintercept = Too_Large_Cells_Thr,
+               color = "red") +
+    facet_grid(rows = vars(Condition)) +
+    labs(title = "DNA Content Distribution in IR and IR-G1-E Cells",
+         y = "Counts",
+         x = "DNA Content (DAPI, A.U.)",
+         fill = "Condition") +
+    scale_x_continuous(limits = c(0,quantile(Data$DAPI, 0.95))) +
+    scale_fill_manual(values = c(CTL = palette[1], IR = palette[2], `IR-G1-E` = palette[3])) +
+    theme(# axis.text.x = element_text(angle = 45, hjust = 1),
+          strip.background = element_rect(fill = "white"))
+}
+
+# plot threshold to visually check and manually re-adjust values
+
+plots_DNA_content_IL6 <- df_thresholds %>%
+  # filter out CTL cells
+  mutate(
+    Data = map(Data, ~ filter(.x, Condition != "CTL"))
+  ) %>%
+  select(Data, Dead_Cells_Thr, G1_G2_Thr, Too_Large_Cells_Thr) %>%
+  pmap(visualize_thresholds)
+
+plots_DNA_content_IL6
+
+plots_DNA_content_IL6[[1]] + labs(title = "Exp. 1") +
+  plots_DNA_content_IL6[[2]] + labs(title = "Exp. 2") +
+  plots_DNA_content_IL6[[3]] + labs(title = "Exp. 3") +
+  plot_layout(nrow = 1,
+              guides = "collect") +
+  plot_annotation(title = "DNA Content Distribution in IR and IR-G1-E Cells")
+
+```
+
+
+```{r df_DNA_content IL6}
+
+df_DNA_content_IL6 <- df_thresholds %>%
+  mutate(
+    # calculate % G1 & G2
+    Data = pmap(
+      list(Data, Dead_Cells_Thr, Too_Large_Cells_Thr, G1_G2_Thr),
+      function(Data, Dead_Cells_Thr, Too_Large_Cells_Thr, G1_G2_Thr)
+      Data %>%
+        group_by(Sample, Condition) %>%
+        summarise(
+          # counts
+          cell_counts = sum(DAPI >= Dead_Cells_Thr & DAPI < Too_Large_Cells_Thr),
+          G1 = sum(DAPI >= Dead_Cells_Thr & DAPI < G1_G2_Thr),
+          G2 = sum(DAPI >= G1_G2_Thr & DAPI < Too_Large_Cells_Thr),
+        ) %>%
+        ungroup() %>%
+        # %
+        mutate(across(which(str_detect(names(.), "G[1-2]")),
+                      ~ .x / cell_counts
+                      )) %>%
+        # pivot longer
+        pivot_longer(cols = c(G1, G2),
+                     names_to = "DNA_content",
+                     values_to = "Percentage") %>%
+        # turn col into factor
+        mutate(
+          DNA_content = factor(DNA_content, levels = c("G2", "G1"))
+        )
+    )
+  )
+
+```
+
+```{r plot_G1G2_percentages IL6}
+
+plot_G1G2_percentages <- function(Data) {
+  
+  # palette
+  palette <- RColorBrewer::brewer.pal(9, "Set1") %>% .[c(3:5)]
+  palette_greys <- seq(0,1,length.out = 30) %>% grey() %>% .[c(24,28)]
+  
+  # generate summary df, with median G1 & G2 %
+  Data_Col <- Data %>%
+    group_by(Condition, DNA_content) %>%
+    summarise(Percentage = mean(Percentage))
+  
+  # generate filtered df, with only G1 data, for geom_point
+  Data_Filtered <- Data %>%
+    filter(DNA_content == "G1")
+  
+  # plot 
+  ggplot(Data,
+         aes(x = Condition,
+             y = Percentage,
+             color = Condition,
+             fill = DNA_content)) +
+    geom_col(data = Data_Col,
+             position = "fill",
+             size = 1,
+             width = 0.5) +
+    # geom_boxplot(data = Data_Filtered,
+    #              outliers = F,
+    #              # position = position_dodge(0.8)
+    #              ) +
+    geom_point(data = Data_Filtered,
+               fill = "white",
+               shape = 21,
+               size = 1.5,
+               position = position_jitter(0.1)
+               # position = position_jitterdodge(jitter.width = 0.1, dodge.width = 0.8)
+               ) +
+    scale_y_continuous(limits = c(0,1),
+                       breaks = seq(0,1, by = 0.2),
+                       labels = percent) +
+    labs(y = "Percentage",
+         x = NULL,
+         title = "% of G1 and G2 Cells per Sample") +
+    scale_color_manual(values = palette[1:3] %>% set_names(c("CTL","IR","IR-G1-E"))) +
+    scale_fill_manual(values = c(palette_greys[1], palette_greys[2])) +
+    guides(fill = guide_legend(title = "DNA Content",
+                               override.aes = list(color="black", stroke=0.2)),
+           color = "none")
+  
+}
+
+df_DNA_content_IL6 <- df_DNA_content_IL6 %>%
+  mutate(
+    Percentage_Plot = map(Data, plot_G1G2_percentages)
+  )
+
+df_DNA_content_IL6$Percentage_Plot
+
+# plot all experiments together
+G1G2_percentages_plot_IL6 <-  df_DNA_content_IL6 %>%
+  select(Dataset, Data) %>%
+  unnest(Data) %>%
+  # remove CTL samples
+  filter(Condition != "CTL") %>%
+  plot_G1G2_percentages()
+
+G1G2_percentages_plot_IL6
+
+```
+
+## IL-6 concentrations
 
 ```{r Data_IL6}
 
@@ -248,8 +453,10 @@ df_ELISA <- df_IL6 %>%
                     # Carry over the Concentration col as well
                     Concentration = mean(Concentration)
                     ) %>%
-          ungroup()
-      )
+          ungroup() %>%
+          # adjust Condition names (change IR-G1 to IR-G1-E)
+          mutate(Condition = str_replace_all(Condition, "^IR-G1$", 'IR-G1-E'))
+        )
     ) %>%
   # remove unnecessary cols
   select(-c(Data,File_Name))
@@ -281,20 +488,1041 @@ Data_IL6 <- df_cell_counts %>%
 
 ```
 
-# IL6 expression
+```{r df_IL6_concentrations}
 
-Regress IL6 concentration
-- subtract blank
-- calculate linear model
-- regress out IL6 concentrations
-- normalize to cell counts
+# Calculate IL6 concentrations and normalize to cell count
+df <- Data_IL6 %>%
+  mutate(
+    # subtract blank Luminescence
+    Data = map(
+      Data,
+      ~ .x %>%
+        mutate(
+          Luminescence = Luminescence - Luminescence[Condition == "Blank"]
+        ) %>%
+        # remove Blank row
+        filter(Condition != "Blank")
+    ),
+    # Fit linear model using Standards
+    ## fit model
+    Linear_Model = map(
+      Data,
+      ~ lm(Concentration ~ Luminescence, data = filter(.x, Condition == "Standard"))
+    ),
+    ## R^2
+    R_squared = map_dbl(
+      Linear_Model,
+      ~ summary(.x)$r.squared
+    ),
+    ## visualize fit
+    Standard_Plot = pmap(
+      list(Data, Dataset, R_squared),
+      function(Data, Dataset, R_squared) {
+        Data %>%
+          filter(Condition == "Standard") %>%
+          ggplot(.,
+                 aes(x = Concentration, y = Luminescence)) +
+          geom_smooth(method = "lm", se = FALSE, color = "black") +
+          geom_point() +
+          labs(title = paste0(Dataset," (R^2: ",sprintf("%.3f", R_squared),")") )
+      }
+    ),
+    # regress concentrations and normalize by Cell_Count
+    Data = pmap(
+      list(Data, Linear_Model),
+      function(Data, Linear_Model) {
+        Data %>%
+          mutate(
+            # regress IL6 conc
+            Concentration = predict(Linear_Model, newdata = Data) / Cell_Count
+          ) %>%
+          # remove Standards
+          filter(Condition != "Standard") %>%
+          # calculate FC
+          mutate(
+            Concentration_FC = Concentration / mean(Concentration[Condition == "CTL"])
+          )
+      }
+    )
+  )
 
-## plot
+# Plot standards for QC
+df$Standard_Plot
+
+# Merge Datasets
+df_IL6_concentrations <- df %>%
+  select(Dataset, Data) %>%
+  unnest(Data) %>%
+  # turn Condition into factor
+  mutate(Condition = factor(Condition))
+
+```
+
+### stats
+
+```{r stats df_IL6_concentrations}
+
+anova_result <- aov(Concentration ~ Condition, data = df_IL6_concentrations)
+
+# If ANOVA is significant, proceed with post-hoc test
+if(summary(anova_result)[[1]]$'Pr(>F)'[1] < 0.05) {
+  # Tukey's HSD Test
+  post_hoc_result <- TukeyHSD(anova_result)
+}
+
+# get x:y coordinates to plot stats
+test_results_IL6 <- post_hoc_result$Condition %>%
+  as_tibble() %>%
+  rename(p_adj = `p adj`) %>%
+  # re-add col with comparisons
+  mutate(
+    # get values from attributes of post_hoc_result
+    Comparison = post_hoc_result$Condition %>%
+      attributes(.) %>% .[["dimnames"]] %>% .[[1]]
+  ) %>%
+  # simplify
+  select(Comparison, p_adj) %>%
+  mutate(
+    # Split the "Comparison" column based on the position of the last "-"
+    Pos_Last_Hyphen = str_locate_all(Comparison, "-") %>%
+      map(
+        ~ .x %>%
+          # turn vector into tibble
+          as_tibble %>%
+          # retrieve last row in tibble
+          filter(row_number(.) == nrow(.)) %>%
+          # extract start position for "-"
+          .$start
+        ) %>%
+      flatten_int(),
+    Condition1 = str_sub(Comparison, 1, Pos_Last_Hyphen-1),
+    Condition2 = str_sub(Comparison, Pos_Last_Hyphen+1, str_length(Comparison)),
+    # Get x and xend
+    ## match Conditions to the factor levels
+    Condition1_level = Condition1 %>%
+      match(., levels(df_IL6_concentrations$Condition)),
+    Condition2_level = Condition2 %>%
+      match(., levels(df_IL6_concentrations$Condition)),
+    ## set x as lowest of the 2 values, xend as the highest
+    x = if_else(Condition1_level < Condition2_level, Condition1_level, Condition2_level) + 0.1,
+    xend = if_else(Condition1_level > Condition2_level, Condition1_level, Condition2_level) - 0.1,
+    # add annotation col
+    annotation = case_when(
+      p_adj < 0.0001 ~ "****",
+      p_adj < 0.001 ~ "***",
+      p_adj < 0.01 ~ "**",
+      p_adj < 0.05 ~ "*",
+      TRUE ~ "ns"
+      ) # sprintf("%.3f", p_adj)
+  ) %>%
+  # rearrange cols
+  select(Condition1, Condition2, p_adj, annotation, x, xend, everything())
+
+test_results_IL6
+
+```
+
+### plot
+
+```{r function plot_IL6_concentrations}
+
+plot_IL6_concentrations <- function(data, y, ylab) {
+  
+  # palette
+  palette <- RColorBrewer::brewer.pal(9, "Set1") %>% .[c(3:5)]
+  
+  # plot
+  ggplot(data,
+         aes(x = Condition,
+             y = !!sym(y))) +
+    geom_boxplot(aes(color = Condition),
+                 outliers = F) +
+    geom_point(aes(fill = Condition),
+               color = "black",
+               shape = 21,
+               size = 2,
+               position = position_jitter(width = 0.1)) +
+    labs(y = ylab,
+         x = NULL) +
+    scale_color_manual(values = palette) +
+    scale_fill_manual(values = palette) +
+    ylim(c(0,NA))
+}
+
+```
+
+```{r plot IL6 concentrations}
+IL6_plots <- pmap(
+  list(
+    y = c("Concentration","Concentration_FC"),
+    ylab = c("IL-6 per Cell (pg/mL)", "Fold Change IL-6 per Cell")
+  ),
+  plot_IL6_concentrations,
+  data = df_IL6_concentrations
+  ) %>%
+  set_names(c("absolute", "relative"))
+
+IL6_plots
+
+```
+
+```{r function plot_IL6_concentrations_abs}
+
+plot_IL6_concentrations_abs <- function(data, y, ylab, test_results) {
+  
+  # palette
+  palette <- RColorBrewer::brewer.pal(9, "Set1") %>% .[c(3:5)]
+  
+  # calculate y position for stats annotations
+  test_results <- test_results %>%
+  mutate(
+    Condition1_ymax = pmap(
+      list(list(data), Condition1),
+      function(data, Condition1)
+        data %>%
+        filter(Condition == Condition1) %>%
+        .$Concentration %>%
+        max()
+      ) %>%
+      flatten_dbl(),
+    Condition2_ymax = pmap(
+      list(list(data), Condition2),
+      function(data, Condition2)
+        data %>%
+        filter(Condition == Condition2) %>%
+        .$Concentration %>%
+        max()
+      ) %>%
+      flatten_dbl(),
+    y = if_else(Condition1_ymax > Condition2_ymax, Condition1_ymax, Condition2_ymax),
+    y = y * 1.1
+  )
+  
+  # plot
+  ggplot(data,
+         aes(x = Condition,
+             y = !!sym(y))) +
+    geom_boxplot(aes(color = Condition),
+                 outliers = F) +
+    geom_point(aes(fill = Condition),
+               color = "black",
+               shape = 21,
+               size = 2,
+               position = position_jitter(width = 0.1)) +
+    # stats
+    ## line
+    geom_segment(
+      data = test_results,
+      aes(x = x, xend = xend, y = y)
+    ) +
+    ## annotation
+    geom_text(
+      data = test_results,
+      aes(x = x + (xend - x)/2, y = y,
+          label = annotation),
+      size = 3,
+      vjust = -0.5
+    ) +
+    labs(y = ylab,
+         x = NULL) +
+    scale_color_manual(values = palette) +
+    scale_fill_manual(values = palette) +
+    ylim(c(0, test_results$y %>% max()*1.1))
+}
+
+```
+
+```{r plot IL6 absolute concentrations w stats}
+
+IL6_plots$absolute <- plot_IL6_concentrations_abs(
+  df_IL6_concentrations,
+  y = "Concentration",
+  ylab = "IL-6 per Cell (pg/mL)",
+  test_results = test_results_IL6 %>%
+    filter(Comparison != "IR-G1-E-CTL")
+)
+
+IL6_plots
+
+```
+
 
 # ABT263 susceptibility
 
+## DNA content distribution
+
+```{r set DNA content thresholds ABT263}
+
+# filter Data for veh-treated cells
+df_ATB263_DNA_content <- df_ATB263 %>%
+  mutate(
+    Data = Data %>%
+      map(~ .x %>%
+            filter(ABT263 == "0.00")
+            ))
+
+# manually set tresholds
+df_thresholds <- df_ATB263 %>%
+  mutate(
+    Dead_Cells_Thr = c(4000000, 2400000, 2500000),
+    G1_G2_Thr = c(11000000, 6000000, 7500000),
+    Too_Large_Cells_Thr = c(23000000, 12000000, 15000000)
+  )
+
+# function
+visualize_thresholds <- function(Data, Dead_Cells_Thr, G1_G2_Thr, Too_Large_Cells_Thr) {
+  # palette
+  palette <- RColorBrewer::brewer.pal(9, "Set1") %>% .[c(3:5)]
+  palette_greys <- seq(0,1,length.out = 30) %>% grey() %>% .[c(24,28)]
+  
+  # plot histogram
+  ggplot(Data) +
+    # G1 background
+    geom_rect(xmin = Dead_Cells_Thr, xmax = G1_G2_Thr,
+              ymin = -Inf, ymax = Inf,
+              fill = palette_greys[2]) +
+    # G2 background
+    geom_rect(xmin = G1_G2_Thr, xmax = Too_Large_Cells_Thr,
+              ymin = -Inf, ymax = Inf,
+              fill = palette_greys[1]) +
+    geom_histogram(
+      aes(x = DAPI,
+          fill = Condition),
+      binwidth = quantile(Data$DAPI, 0.95)/150) +
+    geom_vline(xintercept = Dead_Cells_Thr,
+               color = "red") +
+    geom_vline(xintercept = G1_G2_Thr) +
+    geom_vline(xintercept = Too_Large_Cells_Thr,
+               color = "red") +
+    facet_grid(rows = vars(Condition)) +
+    labs(title = "DNA Content Distribution in IR and IR-G1-E Cells",
+         y = "Counts",
+         x = "DNA Content (DAPI, A.U.)",
+         fill = "Condition") +
+    scale_x_continuous(limits = c(0,quantile(Data$DAPI, 0.95))) +
+    scale_fill_manual(values = c(CTL = palette[1], IR = palette[2], `IR-G1-E` = palette[3])) +
+    theme(# axis.text.x = element_text(angle = 45, hjust = 1),
+          strip.background = element_rect(fill = "white"))
+}
+
+# plot threshold to visually check and manually re-adjust values
+
+plots_DNA_content_ABT263 <- df_thresholds %>%
+  # filter df
+  mutate(
+    Data = map(Data, ~ filter(.x,
+                              # filter out CTL cells
+                              Condition != "CTL",
+                              # keep only vehicle-treated cells
+                              ABT263 == "0.00"))
+  ) %>%
+  select(Data, Dead_Cells_Thr, G1_G2_Thr, Too_Large_Cells_Thr) %>%
+  pmap(visualize_thresholds)
+
+plots_DNA_content_ABT263
+
+plots_DNA_content_ABT263[[1]] + labs(title = "Exp. 1") +
+  plots_DNA_content_ABT263[[2]] + labs(title = "Exp. 2") +
+  plots_DNA_content_ABT263[[3]] + labs(title = "Exp. 3") +
+  plot_layout(nrow = 1,
+              guides = "collect") +
+  plot_annotation(title = "DNA Content Distribution in IR and IR-G1-E Cells")
+
+# visualize thresholds for all ABT263 concentrations
+df_thresholds %>%
+  select(Data, Dead_Cells_Thr, G1_G2_Thr, Too_Large_Cells_Thr) %>%
+  pmap(
+    .,
+    function(Data, Dead_Cells_Thr, G1_G2_Thr, Too_Large_Cells_Thr)
+      visualize_thresholds(Data, Dead_Cells_Thr, G1_G2_Thr, Too_Large_Cells_Thr) +
+      facet_grid(ABT263 ~ Condition)
+    )
+
+```
+
+
+```{r df_DNA_content ABT263}
+
+df_DNA_content_ABT263 <- df_thresholds %>%
+  mutate(
+    # calculate % G1 & G2
+    Data = pmap(
+      list(Data, Dead_Cells_Thr, Too_Large_Cells_Thr, G1_G2_Thr),
+      function(Data, Dead_Cells_Thr, Too_Large_Cells_Thr, G1_G2_Thr)
+      Data %>%
+        group_by(Well, Condition, ABT263) %>%
+        summarise(
+          # counts
+          cell_counts = sum(DAPI >= Dead_Cells_Thr & DAPI < Too_Large_Cells_Thr),
+          G1 = sum(DAPI >= Dead_Cells_Thr & DAPI < G1_G2_Thr),
+          G2 = sum(DAPI >= G1_G2_Thr & DAPI < Too_Large_Cells_Thr),
+        ) %>%
+        ungroup() %>%
+        # %
+        mutate(across(which(str_detect(names(.), "G[1-2]")),
+                      ~ .x / cell_counts
+                      )) %>%
+        # pivot longer
+        pivot_longer(cols = c(G1, G2),
+                     names_to = "DNA_content",
+                     values_to = "Percentage") %>%
+        # turn col into factor
+        mutate(
+          DNA_content = factor(DNA_content, levels = c("G2", "G1"))
+        )
+    )
+  )
+
+```
+
+
+```{r function plot_G1G2_percentages_ABT623}
+
+plot_G1G2_percentages_ABT623 <- function(Data) {
+  
+  # palette
+  palette <- RColorBrewer::brewer.pal(9, "Set1") %>% .[c(3:5)]
+  palette_greys <- seq(0,1,length.out = 30) %>% grey() %>% .[c(24,28)]
+  
+  # generate summary df, with median G1 & G2 %
+  Data_Col <- Data %>%
+    group_by(Condition, ABT263, DNA_content) %>%
+    summarise(Percentage = mean(Percentage))
+  
+  # generate filtered df, with only G1 data, for geom_point
+  Data_Filtered <- Data %>%
+    filter(DNA_content == "G1")
+  
+  # plot 
+  ggplot(Data,
+         aes(x = ABT263,
+             y = Percentage,
+             color = Condition,
+             fill = DNA_content)) +
+    geom_col(data = Data_Col,
+             position = "fill",
+             size = 1,
+             width = 0.5) +
+    geom_point(data = Data_Filtered,
+               fill = "white",
+               shape = 21,
+               size = 1.5,
+               position = position_jitter(0.1)
+               # position = position_jitterdodge(jitter.width = 0.1, dodge.width = 0.8)
+               ) +
+    facet_grid(. ~ Condition) +
+    scale_y_continuous(limits = c(0,1),
+                       breaks = seq(0,1, by = 0.2),
+                       labels = percent) +
+    labs(y = "Percentage",
+         x = NULL,
+         title = "% of G1 and G2 Cells per Sample") +
+    scale_color_manual(values = palette[1:3] %>% set_names(c("CTL","IR","IR-G1-E"))) +
+    scale_fill_manual(values = c(palette_greys[1], palette_greys[2])) +
+    guides(fill = guide_legend(title = "DNA Content",
+                               override.aes = list(color="black", stroke=0.2)),
+           color = "none")
+  
+}
+
+```
+
+
+```{r plot_G1G2_percentages ABT263}
+
+# Generate G1 vs G2 % plot for each experiment
+df_DNA_content_ABT263 <- df_DNA_content_ABT263 %>%
+  mutate(
+    Percentage_Plot = map(Data, plot_G1G2_percentages_ABT623)
+  )
+
+df_DNA_content_ABT263$Percentage_Plot
+
+# plot all experiments together
+df_DNA_content_ABT263 %>%
+  select(Dataset, Data) %>%
+  unnest(Data) %>%
+  plot_G1G2_percentages_ABT623()
+
+G1G2_percentages_plot_ABT263 <- df_DNA_content_ABT263 %>%
+  select(Dataset, Data) %>%
+  unnest(Data) %>%
+  filter(
+    # filter out CTL wells
+    Condition != "CTL",
+    # keep only veh-treated cells
+    ABT263 == "0.00"
+    ) %>%
+  # use function built for IL6 datasets
+  plot_G1G2_percentages()
+
+G1G2_percentages_plot_ABT263
+
+```
+
+## Viability
+
+```{r Data_ABT263}
+
+df <- df_ATB263 %>%
+  # add DNA content thresholds
+  left_join(
+    df_DNA_content_ABT263 %>%
+      select(Dataset, which(str_detect(names(.), "Thr")))
+  ) %>%
+  mutate(
+    # filter cells for Dead_Cells_Thr < DAPI < Too_Large_Cells_Thr
+    Data = pmap(
+      list(Data, Dead_Cells_Thr, Too_Large_Cells_Thr),
+      function(Data, Dead_Cells_Thr, Too_Large_Cells_Thr)
+        Data %>%
+        filter(DAPI > Dead_Cells_Thr & DAPI < Too_Large_Cells_Thr)
+    )
+  )
+
+Data_ABT263 <- df %>%
+  mutate(
+    # Calculate cell counts
+    Data = Data %>%
+      map(~ .x %>%
+            # raw cell counts
+            group_by(Condition, ABT263, Well) %>%
+            summarise(Cell_Count = n()) %>%
+            ungroup() %>%
+            # normilized cell counts
+            group_by(Condition) %>%
+            mutate(
+              Normalization_Count = mean(Cell_Count[ABT263 == "0.00"]),
+              Cell_Count_Normalized = Cell_Count / Normalization_Count
+            ) %>%
+            ungroup()
+            )
+  ) %>%
+  # keep only Dataset and Data cols
+  select(Dataset, Data)
+
+Data_ABT263_G1G2 <- df %>%
+  # count G1 & G2 cells
+  mutate(
+    Data = pmap(
+      list(Data, G1_G2_Thr),
+      function(Data, G1_G2_Thr) {
+        Data %>%
+          # raw counts
+          group_by(Condition, ABT263, Well) %>%
+          summarise(
+            G1 = sum(DAPI < G1_G2_Thr),
+            G2 = sum(DAPI >= G1_G2_Thr),
+          ) %>%
+          ungroup() %>%
+          pivot_longer(cols = c(G1,G2),
+                       names_to = "DNA_content",
+                       values_to = "Cell_Count") %>%
+          mutate(DNA_content = factor(DNA_content, levels = c("G1","G2"))) %>%
+          # counts normilized to vehicle
+          group_by(Condition, DNA_content) %>%
+          mutate(
+            Normalization_Value = mean(Cell_Count[ABT263 == "0.00"]),
+            Cell_Count_Normalized = Cell_Count / Normalization_Value
+          ) %>%
+          ungroup()
+      }
+    )
+  ) %>%
+  # keep only Dataset and Data
+  select(Dataset, Data)
+
+```
+
+## stats
+
+```{r function calculate_test_results}
+
+calculate_test_results <- function(data, category_variable, response_variables, grouping) {
+  
+  stopifnot(is.data.frame(data))
+  stopifnot(is.character(category_variable) & length(category_variable) == 1)
+  stopifnot(is.character(response_variables))
+  stopifnot(is.character(grouping))
+  
+  df <- data %>%
+    group_by(!!!syms(grouping)) %>%
+    summarise(
+      across(all_of(response_variables),
+             ~ list(tidy(
+               wilcox.test(.x ~ !!sym(category_variable),
+                           exact = FALSE) # same as default, but prevents warning
+             ))
+             ),
+      .groups = "drop"
+    ) %>%
+    pivot_longer(cols = !any_of(grouping), names_to = "Variable", values_to = "Test_Results") %>%
+    # adjust p values for multiple comparisons by FDR
+    unnest(Test_Results) %>%
+    ## group by Variable
+    group_by(Variable) %>%
+    mutate(
+      p_adj = p.adjust(p.value, method = "BH"),
+      # add annotation col
+      annotation = case_when(
+        p_adj < 0.0001 ~ "****",
+        p_adj < 0.001 ~ "***",
+        p_adj < 0.01 ~ "**",
+        p_adj < 0.05 ~ "*",
+        TRUE ~ "ns" # sprintf("%.3f", p_adj)
+      )
+    ) %>%
+    ungroup()
+  
+  # return df
+  df
+  
+}
+
+```
+
+
+```{r function calculate_annotation_position, eval=FALSE}
+
+add_annotation_positions <- function(test_results_df, original_df, grouping, x) {
+  
+  # get variables to calculate the max value of
+  Variables <- test_results_df$Variable %>% unique()
+  
+  # calculate max value of all Variables for each grouped subset
+  max_values <- original_df %>%
+    # calculate 
+    group_by(!!!syms(grouping)) %>%
+    summarise(
+      across(.cols = all_of(Variables),
+             .fns = max)
+    ) %>%
+    pivot_longer(cols = !any_of(grouping),
+                 names_to = "Variable",
+                 values_to = "ymax")
+  
+  df <- test_results_df %>%
+    mutate(
+      # calculate x coordinates
+      x_position = as.integer(!!sym(x))
+    ) %>%
+    # add ymax values
+    left_join(max_values) %>%
+    # simplify df
+    select(1:which(names(.) == "Variable"), p.value, which(names(.) == "p_adj"):length(names(.)))
+  
+  # return df
+  df
+}
+
+```
+
+
+```{r stats ABT263 viability}
+
+original_df <- Data_ABT263 %>%
+  # merge all 3 datasets
+  unnest(Data) %>%
+  filter(
+    # remove CTL wells
+    Condition != "CTL",
+    # remove 0.00 µM ABT263 (all Conditions will be at 100% viability)
+    ABT263 != "0.00"
+    ) %>%
+  # turn Condition into factor
+  mutate(Condition = factor(Condition))
+
+test_results <- original_df %>%
+  # compare viability in IR vs IR-G1-E cells for each ABT263 concentration
+  calculate_test_results(data = .,
+                         category_variable = "Condition",
+                         response_variables = "Cell_Count_Normalized",
+                         grouping = "ABT263")
+
+test_results
+
+```
+
+
+```{r stats ABT263 viability G1G2}
+
+original_df <- Data_ABT263_G1G2 %>%
+  # merge all 3 datasets
+  unnest(Data) %>%
+  filter(
+    # remove 0.00 µM ABT263 (all Conditions will be at 100% viability)
+    ABT263 != "0.00"
+    ) %>%
+  # turn Condition into factor
+  mutate(Condition = factor(Condition))
+
+test_results_G2G2 <- original_df %>%
+  # compare viability in IR vs IR-G1-E cells for each ABT263 concentration
+  calculate_test_results(data = .,
+                         category_variable = "DNA_content",
+                         response_variables = "Cell_Count_Normalized",
+                         grouping = c("ABT263", "Condition"))
+
+test_results_G2G2
+
+```
+
 ## plot
 
+```{r function plot_ABT263_viability}
+
+plot_ABT263_viability <- function(Data,
+                                  test_results
+                                  ) {
+  
+  # palette
+  palette <- RColorBrewer::brewer.pal(9, "Set1") %>% .[c(3:5)]
+  
+  # convert ABT263 from factor to double
+  Data <- Data %>%
+    mutate(
+      ABT263 = as.character(ABT263),
+      ABT263 = as.double(ABT263),
+      ABT263 = if_else(ABT263 == 0, min(ABT263[ABT263 > 0]) / 3, ABT263)
+    )
+  
+  # generate summary data
+  summary_data <- Data %>%
+    group_by(Condition, ABT263) %>%
+    summarize(
+      median = median(Cell_Count_Normalized),
+      mean = mean(Cell_Count_Normalized),
+      SD = sd(Cell_Count_Normalized),
+      sample_n = n(),
+      SEM = SD / sqrt(sample_n)
+    ) %>%
+    ungroup()
+  
+  # Create a new transformation for log base 3
+  log3_trans <- trans_new(name = "log3",
+                          transform = function(x) log(x, base = 3),
+                          inverse = function(x) 3^x,
+                          breaks = log_breaks(base = 3),
+                          format = function(x)
+                            if_else(x < 0.1, 0, x) %>% sprintf("%.2f", .),
+                          domain = c(0.001, Inf))
+  
+  # plot
+  ggplot(summary_data,
+         aes(x = ABT263,
+             y = mean)) +
+    # reference line at 100% viability
+    geom_hline(yintercept = 1, alpha = 1/5) +
+    # smooth line
+    geom_smooth(
+      data = Data,
+      aes(x = ABT263,
+          y = Cell_Count_Normalized,
+          color = Condition),
+      se = FALSE
+    ) +
+    # SEM
+    geom_errorbar(
+      aes(ymin = mean-SEM, ymax = mean+SEM),
+      width = max(Data$ABT263)/30
+    ) +
+    # mean
+    geom_point(aes(fill = Condition),
+               color = "black",
+               shape = 21
+               ) +
+    # add stats
+    geom_text(
+      data = test_results %>%
+        mutate(
+          x_position = as.character(ABT263) %>% as.double(.) %>% sort(),
+          ymax = summary_data %>%
+            filter(ABT263 != min(ABT263),
+                   Condition != "CTL") %>%
+            group_by(ABT263) %>%
+            summarise(max = max(mean+SEM)) %>%
+            arrange(ABT263) %>%
+            .$max
+        ),
+      aes(x = x_position,
+          y = ymax,
+          label = annotation
+          ),
+      size = 3, vjust = -0.5
+    ) +
+    scale_y_continuous(labels = percent,
+                       limits = c(0,NA),
+                       breaks = seq(0,2,by=0.2)
+                       ) +
+    scale_x_continuous(transform = log3_trans,
+                       limits = c(NA,NA)) +
+    labs(y = "Cell Counts Normalized to Vehicle", # or "Viability" ?
+         x = "ABT263 (µM)") +
+    scale_color_manual(values = palette) +
+    scale_fill_manual(values = palette)
+}
+```
+
+```{r plots ABT263 viability}
+
+# # plot viability for each experiment
+# # ! Need to calculate the stats for individual datasets to plot these !
+# Data_ABT263$Data %>%
+#   map(plot_ABT263_viability)
+
+# plot viability for all experiments together
+ABT263_viability <- Data_ABT263 %>%
+  unnest(Data) %>%
+  plot_ABT263_viability(Data = ., test_results = test_results)
+
+ABT263_viability
+
+```
+
+```{r function plot_ABT263_viability_G1G2}
+
+plot_ABT263_viability_G1G2 <- function(Data,
+                                  test_results
+                                  ) {
+  
+  # palette
+  palette <- RColorBrewer::brewer.pal(9, "Set1") %>% .[c(3:5)]
+  palette_greys <- seq(0,1,length.out = 30) %>% grey() %>% .[c(24,28)]
+  
+  # convert ABT263 from factor to double
+  Data <- Data %>%
+    mutate(
+      ABT263 = as.character(ABT263),
+      ABT263 = as.double(ABT263),
+      # change 0 values in order to have log3 scale on x axis
+      # 0 -> 1/3 of lowest non-0 value; this creates even spacing between new 0 and other ABT263 values
+      ABT263 = if_else(ABT263 == 0, min(ABT263[ABT263 > 0]) / 3, ABT263)
+    )
+  
+  # generate summary data
+  summary_data <- Data %>%
+    group_by(Condition, ABT263, DNA_content) %>%
+    summarize(
+      median = median(Cell_Count_Normalized),
+      mean = mean(Cell_Count_Normalized),
+      SD = sd(Cell_Count_Normalized),
+      sample_n = n(),
+      SEM = SD / sqrt(sample_n)
+    ) %>%
+    ungroup()
+  
+  # Create a new transformation for log base 3
+  log3_trans <- trans_new(name = "log3",
+                          transform = function(x) log(x, base = 3),
+                          inverse = function(x) 3^x,
+                          breaks = log_breaks(base = 3),
+                          format = function(x)
+                            if_else(x < 0.1, 0, x) %>% sprintf("%.2f", .),
+                          domain = c(0.001, Inf))
+  
+  # plot
+  ggplot(summary_data,
+         aes(x = ABT263,
+             y = mean)) +
+    # reference line at 100% viability
+    geom_hline(yintercept = 1, alpha = 1/5) +
+    # smooth line
+    geom_smooth(
+      data = Data,
+      aes(x = ABT263,
+          y = Cell_Count_Normalized,
+          color = DNA_content),
+      se = FALSE
+    ) +
+    # SEM
+    geom_errorbar(
+      aes(ymin = mean-SEM, ymax = mean+SEM),
+      width = max(Data$ABT263)/30
+    ) +
+    # mean
+    geom_point(aes(fill = Condition),
+               color = "black",
+               shape = 21
+               ) +
+    # add stats
+    geom_text(
+      data = test_results %>%
+        # calculate label coordinates
+        # and sort appropriately to match x and y coordinates
+        mutate(
+          x_position = as.character(ABT263) %>% as.double(.) %>% sort(),
+          ymax = summary_data %>%
+            filter(ABT263 != min(ABT263)) %>%
+            group_by(Condition, ABT263) %>%
+            summarise(max = max(mean+SEM)) %>%
+            arrange(ABT263) %>%
+            .$max
+        ),
+      aes(x = x_position,
+          y = ymax,
+          label = annotation
+          ),
+      size = 3, vjust = -0.5
+    ) +
+    facet_grid(. ~ Condition) +
+    scale_y_continuous(labels = percent,
+                       limits = c(0,NA),
+                       breaks = seq(0,2,by=0.2)
+                       ) +
+    scale_x_continuous(transform = log3_trans,
+                       limits = c(NA,NA)) +
+    labs(y = "Cell Counts Normalized to Vehicle", # or "Viability" ?
+         x = "ABT263 (µM)") +
+    scale_color_manual(values = palette_greys[c(1,2)] %>% set_names(c("G2","G1"))) +
+    scale_fill_manual(values = palette[1:3] %>% set_names(c("CTL","IR","IR-G1-E"))) +
+    # # add black square around color aes
+    # guides(color = guide_legend(
+    #   theme = theme(legend.key = element_rect(color = "black"))
+    #   )) +
+    theme(strip.background = element_rect(fill = "white"))
+}
+
+```
+
+```{r plots ABT263 viability G1G2}
+
+# plot viability for all experiments together
+ABT263_viability_G1G2 <- Data_ABT263_G1G2 %>%
+  unnest(Data) %>%
+  # remove CTL
+  filter(Condition != "CTL") %>%
+  plot_ABT263_viability_G1G2(Data = ., test_results = test_results_G2G2 %>%
+                               filter(Condition != "CTL"))
+
+ABT263_viability_G1G2
+
+```
+
+# Figure: Functional Differences in IR vs IR-G1-E Populations
+
+```{r Figure Functional Differences in IR vs IR-G1-E Populations, fig.asp=1.33}
+
+place_holder <- ggplot() + theme_void()
+
+Workflow <- ggplot() + theme_void() # + labs(title = "Workflow")
+
+# # Patchwork v1
+# 
+# layout1 <- "
+# AAA
+# BCD
+# EEE
+# FGH
+# "
+# 
+# Fig_Functional_Experiments_v1 <- Workflow +
+#   plots_DNA_content_IL6[[2]] + labs(title = "DNA Content Distribution") +
+#   G1G2_percentages_plot_IL6 + labs(title = "% G1 & G2") +
+#   IL6_plots$absolute + labs(title = "IL-6 Secretion") +
+#   Workflow +
+#   plots_DNA_content_ABT263[[2]] + labs(title = "DNA Content Distribution") +
+#   G1G2_percentages_plot_ABT263 + labs(title = "% G1 & G2") +
+#   ABT263_viability + labs(title = "ABT263 Susceptibility") +
+#   plot_layout(design = layout1,
+#               widths = c(2,1,2),
+#               guides = "keep") +
+#   plot_annotation(tag_levels = "a"
+#                   ) &
+#   theme(plot.title = element_text(size = 10, hjust = 0.5),
+#         plot.tag = element_text(size = 12, face = "bold"),
+#         legend.position = "right",
+#         legend.key.size = unit(0.3, "cm"),
+#         legend.title = element_blank(),
+#         legend.text = element_text(size = 8),
+#         axis.title = element_text(size = 8),
+#         axis.text = element_text(size = 8),
+#         strip.text = element_text(size = 8),
+#         strip.background = element_rect(fill = "white")
+#         )
+# 
+# Fig_Functional_Experiments_v1
+
+# Patchwork v1
+
+layout2 <- "
+AAAAA
+BBCDD
+EEEEF
+GGHHH
+"
+
+Fig_Functional_Experiments_v2 <- Workflow +
+  plots_DNA_content_IL6[[2]] + labs(title = "DNA Content Distribution") +
+  G1G2_percentages_plot_IL6 + labs(title = "% G1 & G2") +
+  IL6_plots$absolute + labs(title = "IL-6 Secretion") +
+  Workflow +
+  G1G2_percentages_plot_ABT263 + labs(title = "% G1 & G2") +
+  Workflow +
+  #ABT263_viability + labs(title = "ABT263 Susceptibility\nIR vs IR-G1-E") +
+  ABT263_viability_G1G2 + labs(title = "ABT263 Susceptibility\nWithin IR & IR-G1-E Subpopulations (G1 vs G2)") +
+  plot_layout(design = layout2,
+              # widths = c(2,1,2),
+              guides = "keep") +
+  plot_annotation(tag_levels = "a") &
+  theme(plot.title = element_text(size = 10, hjust = 0.5),
+        plot.tag = element_text(size = 12, face = "bold"),
+        plot.margin = margin(),
+        legend.position = "right",
+        legend.margin = margin(l = -0.25, r = 0.1, unit = "cm"),
+        legend.key.size = unit(0.3, "cm"),
+        legend.title = element_blank(),
+        legend.text = element_text(size = 8),
+        axis.title = element_text(size = 8),
+        axis.text = element_text(size = 8),
+        strip.text = element_text(size = 8),
+        strip.background = element_rect(fill = "white")
+        )
+
+Fig_Functional_Experiments_v2
+
+```
+
+```{r save Fig, eval=FALSE}
+
+# function png
+save_png <- function(figure, name, width = 7.5, height = 10) {
+  png(paste0("inst/figures/",name,"_", Sys.Date(), ".png"),
+    width = width,
+    height = height,
+    units = "in",
+    family = "sans",
+    bg = "transparent", # doesn't work, bg is actually white
+    res = 600)
+
+  print(figure)
+  
+  dev.off()
+}
+
+# save png
+save_png(Fig_Functional_Experiments_v2, "Fig_Functional_Experiments_v2")
+
+ABT263_viability <- ABT263_viability + labs(title = "ABT263 Susceptibility\nIR vs IR-G1-E") +
+theme(plot.title = element_text(size = 10, hjust = 0.5),
+        plot.tag = element_text(size = 12, face = "bold"),
+        plot.margin = margin(),
+        legend.position = "right",
+        legend.margin = margin(l = -0.25, r = 0.1, unit = "cm"),
+        legend.key.size = unit(0.3, "cm"),
+        legend.title = element_blank(),
+        legend.text = element_text(size = 8),
+        axis.title = element_text(size = 8),
+        axis.text = element_text(size = 8),
+        strip.text = element_text(size = 8),
+        strip.background = element_rect(fill = "white")
+        )
+
+save_png(ABT263_viability, "ABT263_viability", width = 2.61, height = 2.8)
+
+```
+
+
+# Pilot Experiment Data
 
 ```{r load IAoutput files and metadata, include=FALSE}
   
