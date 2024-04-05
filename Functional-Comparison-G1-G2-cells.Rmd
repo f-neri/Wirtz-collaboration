@@ -868,7 +868,8 @@ df_DNA_content_ABT263 <- df_thresholds %>%
                      values_to = "Percentage") %>%
         # turn col into factor
         mutate(
-          DNA_content = factor(DNA_content, levels = c("G2", "G1"))
+          DNA_content = factor(DNA_content, levels = c("G2", "G1")),
+          Condition = factor(Condition, levels = c("CTL","IR","IR-G1-E"))
         )
     )
   )
@@ -927,6 +928,48 @@ plot_G1G2_percentages_ABT623 <- function(Data) {
 
 ```
 
+```{r stats G1G2_percentages ABT263}
+
+# test whether ABT263 treatment resulted in changes in proportion of G1/G2 cells across Conditions
+# Generate dfs with all 3 datasets keep only G1
+test_results_G1G2_shift <- df_DNA_content_ABT263 %>%
+  select(Dataset, Data) %>%
+  unnest(Data) %>%
+  # filter for G1 proportions only
+  filter(DNA_content == "G1") %>%
+  # split by Condition
+  group_by(Condition) %>%
+  nest() %>% # .$data
+  # run ANOVA for each Condition dataset
+  mutate(
+    ANOVA = map(data, ~ aov(Percentage ~ ABT263, data = .x)),
+    ANOVA_summary = map(ANOVA, ~ summary(.x)),
+    ANOVA_pvalue = map_dbl(
+      ANOVA,
+      ~ .x %>% broom::tidy() %>% . $p.value %>% .[1]
+    ),
+    TukeyHSD = map(
+      ANOVA,
+      ~ TukeyHSD(.x)
+    )
+  )
+
+# test for difference in G1-G2 % between veh-treated IR and IR-G1 populations
+test_results_G1G2_shift_vehicle <- df_DNA_content_ABT263 %>%
+  select(Dataset, Data) %>%
+  unnest(Data) %>%
+  filter(
+    ABT263 == "0.00",
+    Condition != "CTL",
+    # test differences based on G1 % values
+    DNA_content == "G1"
+    ) %>%
+  wilcox.test(Percentage ~ Condition, data = .) %>% .$p.value
+
+test_results_G1G2_shift_vehicle
+
+```
+
 
 ```{r plot_G1G2_percentages ABT263}
 
@@ -944,6 +987,7 @@ df_DNA_content_ABT263 %>%
   unnest(Data) %>%
   plot_G1G2_percentages_ABT623()
 
+# plot all experiments, but only data from vehicle-treated IR and IR-G1 cells
 G1G2_percentages_plot_ABT263 <- df_DNA_content_ABT263 %>%
   select(Dataset, Data) %>%
   unnest(Data) %>%
@@ -954,7 +998,13 @@ G1G2_percentages_plot_ABT263 <- df_DNA_content_ABT263 %>%
     ABT263 == "0.00"
     ) %>%
   # use function built for IL6 datasets
-  plot_G1G2_percentages()
+  plot_G1G2_percentages() +
+  # add pvalue
+  geom_segment(x=1, xend=2, y=1.05,
+               color = "black") +
+  geom_text(x = 1.5, y = 1.05, label = "****",
+            color = "black", vjust = -0.2, size = 3) +
+  scale_y_continuous(limits = c(0,1.1), breaks = seq(0,1,by=0.2), labels = scales::percent)
 
 G1G2_percentages_plot_ABT263
 

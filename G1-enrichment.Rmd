@@ -1,0 +1,613 @@
+---
+title: "G1 enrichment"
+author: "Francesco Neri"
+date: "`r Sys.Date()`"
+output: html_document
+---
+
+Analysis of FN047.01 (see details on [benchling](https://benchling.com/francesconeri/f/lib_zYqsGFL4-senescence-morphology-study/etr_1qDjrVUH-fn047-01_hmvecl_fs-ss_ir_dna-content-after-g1-enrichment/edit))
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = FALSE,
+                      include = FALSE,
+                      fig.align='center',
+                      out.width="100%",
+                      fig.width=7.5,
+                      fig.asp=0.618)
+
+# libraries
+
+library(tidyverse)
+library(devtools)
+library(readxl)
+library(openxlsx)
+library(plater)
+library(ggpubr)
+library(patchwork)
+# library(functions) # package with custom functions
+
+# theme_bw
+theme_set(theme_bw())
+
+# file paths
+
+folder_path <- here::here("inst", "extdata", "FN047.01")
+
+input_files <- tibble(
+  IA_output_file_path = c(here::here(folder_path, "IAoutput_Mock.xlsx"),
+                          here::here(folder_path, "IAoutput_IR.xlsx")
+                          ),
+  metadata_file_path = c(here::here(folder_path, "IAoutput_Mock_metadata.csv"),
+                         here::here(folder_path, "IAoutput_IR_metadata.csv")
+                         )
+)
+
+# theme_bw
+theme_set(theme_bw())
+
+```
+
+## Load data
+
+```{r costum functions, eval=TRUE}
+
+# tidy IAoutput
+tidy_IAoutput <- function(data,
+                          channel_0 = "Nuclear_Area",
+                          channel_1 = "DAPI",
+                          channel_2 = "EdU",
+                          channel_3 = "SABGal") {
+  
+  IAoutput <- data
+  
+  # change Plot_Name/Name column name to well
+  IAoutput <- if ( any(colnames(IAoutput) %in% "Plot Name") ) {
+    IAoutput %>% dplyr::rename(well = "Plot Name")
+  } else {
+    IAoutput %>% dplyr::rename(well = .data$Name)
+  }
+  
+  # remove extra columns
+  
+  ## the pattern looks for "well", "Channel", or "OBJ" followed by any number
+  ## the regular expression is case insensitive, indicated by (?i)
+  pattern_to_keep <- "^(?i)(well|Channel|OBJ[0-9]*)$"
+  
+  cols_to_keep <- grepl(pattern_to_keep, names(IAoutput))
+  
+  IAoutput <- IAoutput[, cols_to_keep]
+  
+  # pivot_longer()
+  OBJ_vec <- colnames(IAoutput)[-(1:2)]
+  
+  tidy_data1 <-  tidyr::pivot_longer(IAoutput, dplyr::all_of(OBJ_vec),
+                                     names_to = "cell_ID",
+                                     values_to = "Signal_Intensity")
+  
+  # adjust Channel column name and values
+  
+  tidy_data1 <- tidy_data1 %>%
+    dplyr::rename(Measured_Parameter = .data$Channel) %>%
+    dplyr::mutate(Measured_Parameter = dplyr::case_when(
+      Measured_Parameter == 0 ~ channel_0,
+      Measured_Parameter == 1 ~ channel_1,
+      Measured_Parameter == 2 ~ channel_2,
+      Measured_Parameter == 3 ~ channel_3,
+      .default = "other_channel")
+    )
+  
+  # adjust well column values - extract first letter followed by 2 digits
+  
+  tidy_data1 <- tidy_data1 %>%
+    dplyr::mutate(well = stringr::str_extract(.data$well, "[A-Za-z]\\d{2}")) %>%
+    dplyr::select(.data$well, .data$cell_ID, dplyr::everything()) # rearrange column order
+  
+  # pivot_wider()
+  
+  tidy_data2 <- tidy_data1 %>%
+    tidyr::pivot_wider(names_from = .data$Measured_Parameter,
+                       values_from = .data$Signal_Intensity) %>%
+    stats::na.omit() # remove cells that had with blank/NA signal intensities in IAoutput file
+  
+  tidy_data2
+}
+
+# merge plate metadata 
+merge_plate_metadata <- function(
+    tidied_IAoutput_df,
+    metadata
+    ) {
+  # importing metadata regarding conditions of each well (IR or CTL, full serum or serum-starved, different drug concentrations etc.)
+  
+  ## plater
+  plate_metadata <- read_plate(
+    file = metadata,             # full path to the .csv file
+    well_ids_column = "well",    # name to give column of well IDs (optional)
+    sep = ","                     # separator used in the csv file (optional)
+  )
+  
+  # change variable names to lower case, removing parenthesis (if present)
+  colnames(plate_metadata) <- colnames(plate_metadata) %>%
+    tolower() %>%
+    str_replace_all(., "[()]", "")
+  
+  # check that plate-template contains Condition variable
+  if (any(colnames(plate_metadata) %in% "condition") == TRUE) {} else {
+    beep(1)
+    Sys.sleep(2)
+    stop(
+      "The metadata entered in plate-template must contain the \"Condition\" variable"
+    )}
+  
+  # check that the variables contained in plate-template are limited to
+  # condition, and up to 2 additional variable (e.g. serum and/or drug treatment)
+  additional_variables <- colnames(plate_metadata) %>%
+    .[-grep(pattern = "well|condition", .)]
+  
+  if (length(additional_variables) > 2) {
+    beep(1)
+    Sys.sleep(2)
+    stop(
+      "The metadata entered in plate-template is not acceptable.
+
+The only metadata that can be entered in the plate-template file are
+\"Condition\" and up to TWO more variable (e.g. \"Serum\" and/or \"Drug_concentration\")")
+  }
+
+  # add plate column
+  
+  metadata_file_name <- metadata %>%
+    sub(pattern = ".*\\/([^/]+)\\.csv$", replacement = "\\1")
+  
+  plate_metadata <- plate_metadata %>%
+    mutate(plate = metadata_file_name)
+  
+  # add metadata info to tidied_IAoutput file
+  
+  ## mutating join with left_join()
+  
+  plate_metadata_variables <- colnames(plate_metadata)[-1]
+  
+  tidied_IAoutput_df %>%
+    left_join(plate_metadata, by = "well") %>%
+    select(plate, well, cell_ID, all_of(plate_metadata_variables), everything())
+}
+
+```
+
+
+```{r load data}
+
+# create function to load data (i.e. import IA output, tidy, merge with plate metadata)
+
+load_data <- function(IA_output_file_path, metadata_file_path) {
+  
+  IAoutput <- readxl::read_xlsx(path = IA_output_file_path,
+                                skip = 1,
+                                na = "NA"
+                                )
+  tidied_IAoutput <- tidy_IAoutput(data = IAoutput)
+  
+  merge_plate_metadata(tidied_IAoutput_df = tidied_IAoutput,
+                       metadata = metadata_file_path)
+}
+
+# load data from files listed in input_files
+
+plates <- vector(mode = "list", length = nrow(input_files))
+
+for (i in seq_along(input_files)) {
+  plates[[i]] <- load_data(input_files$IA_output_file_path[i], input_files$metadata_file_path[i])
+}
+
+# merge data from multiple plates
+
+df <- bind_rows(plates) %>%
+  # adjust df col names
+  dplyr::rename_with(~stringr::str_replace(., "^.", stringr::str_to_title)) %>%
+  # change Serum values
+  mutate(
+    Serum = case_when(
+      Serum == "FS" ~ "no-E",
+      Serum == "SS" ~ "G1-E",
+      TRUE ~ Serum
+    ),
+    Serum = factor(Serum, levels = c("no-E","G1-E"))
+  )
+
+df
+
+```
+
+## G1/low vs G2/high DNA content threshold
+
+
+```{r set DNA content thresholds}
+
+# manually set tresholds
+df_thresholds <- df %>%
+  # separate dataset based on Condition
+  group_by(Condition) %>%
+  nest(.key = "Data") %>%
+  ungroup() %>%
+  mutate(
+    # re-add Condition col in Data
+    Data = pmap(
+      list(Data, Condition),
+      function(Data, Condition)
+        Data %>%
+        mutate(Condition = Condition)
+    ),
+    # manually add tresholds
+    Dead_Cells_Thr = c(2.5e+6, 3.0e+6),
+    G1_G2_Thr = c(7.75e+6, 9.8e+6),
+    Too_Large_Cells_Thr = c(15e+06, 20e+6)
+  )
+
+# function
+visualize_thresholds <- function(Data, Dead_Cells_Thr, G1_G2_Thr, Too_Large_Cells_Thr) {
+  # palette
+  palette <- RColorBrewer::brewer.pal(9, "Set1") %>% .[c(3:4)]
+  palette_greys <- seq(0,1,length.out = 30) %>% grey() %>% .[c(24,28)]
+  
+  # plot histogram
+  ggplot(Data) +
+    # G1 background
+    geom_rect(xmin = Dead_Cells_Thr, xmax = G1_G2_Thr,
+              ymin = -Inf, ymax = Inf,
+              fill = palette_greys[2]) +
+    # G2 background
+    geom_rect(xmin = G1_G2_Thr, xmax = Too_Large_Cells_Thr,
+              ymin = -Inf, ymax = Inf,
+              fill = palette_greys[1]) +
+    geom_histogram(
+      aes(x = DAPI,
+          fill = Condition),
+      binwidth = quantile(Data$DAPI, 0.95)/150) +
+    geom_vline(xintercept = Dead_Cells_Thr,
+               color = "red") +
+    geom_vline(xintercept = G1_G2_Thr) +
+    geom_vline(xintercept = Too_Large_Cells_Thr,
+               color = "red") +
+    facet_grid(rows = vars(Condition),
+               cols = vars(Serum)) +
+    labs(title = "DNA Content Distribution",
+         y = "Counts",
+         x = "DNA Content (DAPI, A.U.)",
+         fill = "Condition") +
+    coord_cartesian(xlim = c(0,quantile(Data$DAPI, 0.98))) +
+    scale_fill_manual(values = c(CTL = palette[1], IR = palette[2])) +
+    theme(# axis.text.x = element_text(angle = 45, hjust = 1),
+          strip.background = element_rect(fill = "white"))
+}
+
+# plot threshold to visually check and manually re-adjust values
+
+plots_DNA_content <- df_thresholds %>%
+  select(Data, Dead_Cells_Thr, G1_G2_Thr, Too_Large_Cells_Thr) %>%
+  pmap(visualize_thresholds)
+
+plots_DNA_content
+
+plots_DNA_content[[1]] + plots_DNA_content[[2]] +
+  plot_layout(ncol = 1,
+              guides = "collect",
+              axes = "collect")
+
+```
+
+```{r plot DNA tresholds}
+
+# plot DNA content of CTL and IR cell together
+
+# function
+visualize_thresholds_combined <- function(df, df_thresholds) {
+  # palette
+  palette <- RColorBrewer::brewer.pal(9, "Set1") %>% .[c(3:4)]
+  palette_greys <- seq(0,1,length.out = 30) %>% grey() %>% .[c(24,28)]
+  
+  # plot histogram
+  ggplot() +
+    # G1 background
+    geom_rect(data = df_thresholds,
+              aes(xmin = Dead_Cells_Thr, xmax = G1_G2_Thr),
+              ymin = -Inf, ymax = Inf,
+              fill = palette_greys[2]) +
+    # G2 background
+    geom_rect(data = df_thresholds,
+              aes(xmin = G1_G2_Thr, xmax = Too_Large_Cells_Thr),
+              ymin = -Inf, ymax = Inf,
+              fill = palette_greys[1]) +
+    geom_histogram(
+      data = df,
+      aes(x = DAPI,
+          fill = Condition),
+      binwidth = quantile(df$DAPI, 0.95)/150) +
+    geom_vline(data = df_thresholds,
+               aes(xintercept = Dead_Cells_Thr),
+               color = "red") +
+    geom_vline(data = df_thresholds,
+               aes(xintercept = G1_G2_Thr)
+               ) +
+    geom_vline(data = df_thresholds,
+               aes(xintercept = Too_Large_Cells_Thr),
+               color = "red") +
+    facet_grid(rows = vars(Condition),
+               cols = vars(Serum)) +
+    labs(title = "DNA Content Distribution",
+         y = "Counts",
+         x = "DNA Content (DAPI, A.U.)",
+         fill = "Condition") +
+    coord_cartesian(xlim = c(0,quantile(df$DAPI, 0.98))) +
+    scale_fill_manual(values = c(CTL = palette[1], IR = palette[2])) +
+    theme(# axis.text.x = element_text(angle = 45, hjust = 1),
+          strip.background = element_rect(fill = "white"))
+}
+
+# plot threshold to visually check and manually re-adjust values
+
+plot_DNA_content_combined <- visualize_thresholds_combined(df, df_thresholds)
+
+plot_DNA_content_combined
+
+```
+
+
+## G1/G2 proportion in SEN vs CTL cells
+
+
+```{r df G1 vs G2 proportions}
+
+# calculate % cells with G1 and G2 DNA content
+
+df_DNA_content <- df_thresholds %>%
+  mutate(
+    # generate summary Data with G1 and G2 counts
+    Data = pmap(
+      list(Data, Dead_Cells_Thr, G1_G2_Thr, Too_Large_Cells_Thr),
+      function(Data, Dead_Cells_Thr, G1_G2_Thr, Too_Large_Cells_Thr)
+        Data %>%
+        group_by(Plate, Serum, Well) %>%
+        summarize(
+          Counts = sum(DAPI >= Dead_Cells_Thr & DAPI < Too_Large_Cells_Thr),
+          G1 = sum(DAPI >= Dead_Cells_Thr & DAPI < G1_G2_Thr),
+          G2 = sum(DAPI >= G1_G2_Thr & DAPI < Too_Large_Cells_Thr)
+        ) %>%
+        ungroup() %>%
+        # %
+        mutate(across(which(str_detect(names(.), "G[1-2]")),
+                      ~ .x / Counts
+                      )) %>%
+        # pivot longer
+        pivot_longer(cols = c(G1, G2),
+                     names_to = "DNA_content",
+                     values_to = "Percentage") %>%
+        # turn col into factor
+        mutate(
+          DNA_content = factor(DNA_content, levels = c("G2", "G1"))
+        )
+    )) %>%
+  # bind CTL and IR Data
+  unnest(cols = Data)
+
+df_DNA_content
+
+```
+
+
+```{r plot_G1G2_percentages}
+
+plot_G1G2_percentages <- function(Data) {
+  
+  # palette
+  palette <- RColorBrewer::brewer.pal(9, "Set1") %>% .[c(3:4)]
+  palette_greys <- seq(0,1,length.out = 30) %>% grey() %>% .[c(24,28)]
+  
+  # generate summary df, with mean G1 & G2 %
+  Data_Col <- Data %>%
+    group_by(Condition, Serum, DNA_content) %>%
+    summarise(Percentage = mean(Percentage))
+  
+  # generate filtered df, with only G1 data, for geom_point
+  Data_Filtered <- Data %>%
+    filter(DNA_content == "G1")
+  
+  # plot 
+  ggplot(Data,
+         aes(x = Serum,
+             y = Percentage,
+             color = Condition,
+             fill = DNA_content)) +
+    geom_col(data = Data_Col,
+             position = "fill",
+             size = 1,
+             width = 0.5) +
+    geom_point(data = Data_Filtered,
+               fill = "white",
+               shape = 21,
+               size = 1.5,
+               position = position_jitter(0.1)
+               # position = position_jitterdodge(jitter.width = 0.1, dodge.width = 0.8)
+               ) +
+    scale_y_continuous(limits = c(0,1),
+                       breaks = seq(0,1, by = 0.2),
+                       labels = scales::percent) +
+    facet_grid(. ~ Condition) +
+    labs(y = "Percentage",
+         x = NULL,
+         title = "% of G1 & G2 Cells With or Without G1-Enrichment") +
+    scale_color_manual(values = palette[1:2] %>% set_names(c("CTL","IR"))) +
+    scale_fill_manual(values = palette_greys[1:2]) +
+    guides(fill = guide_legend(title = "DNA Content",
+                               reverse = TRUE,
+                               override.aes = list(color="black", stroke=0.2)),
+           color = guide_legend(title = NULL,
+                                override.aes = list(fill="white")))
+  
+}
+
+percentage_G1G2 <- plot_G1G2_percentages(df_DNA_content)
+
+percentage_G1G2
+
+```
+
+```{r fold change G1 G2}
+
+df_DNA_content_fc <- df_DNA_content %>%
+  functions::add_fold_change(
+    vars_to_normalize = "Percentage",
+    grouping_arguments = c("Condition", "Serum", "DNA_content"),
+    normalization_variable = "Serum",
+    normalization_value = "no-E"
+  ) %>%
+  # add key that combines Condition and Serum
+  mutate(
+    Condition_Serum = str_c(Condition, Serum, sep = "_")
+  )
+
+```
+
+
+## Stats
+
+```{r stats fold change G2}
+
+df_DNA_content_fc %>%
+  filter(
+    DNA_content == "G1",
+    Serum == "G1-E"
+    ) %>%
+  wilcox.test(Percentage_fc ~ Condition, data = .) %>%
+  broom::tidy()
+
+```
+
+
+## plots
+
+```{r plot fold change G1 G2}
+  
+plot_fc_G1_G2 <- function(Data) {
+  
+  # palette
+  palette <- RColorBrewer::brewer.pal(9, "Set1") %>% .[c(3:4)]
+  palette_greys <- seq(0,1,length.out = 30) %>% grey() %>% .[c(24,28)]
+  
+  # set DNA_content levels to be G1,G2
+  Data <- Data %>%
+    mutate(
+      DNA_content = fct_rev(DNA_content)
+    )
+  
+  # df summary for geom_col
+  Data_Summary <- Data %>%
+    group_by(Condition_Serum, Condition, Serum, DNA_content) %>%
+    summarise(
+      Percentage_fc = mean(Percentage_fc)
+    )
+  
+  ggplot(Data) +
+    geom_col(data = Data_Summary,
+             aes(x = Serum,
+                 y = Percentage_fc,
+                 fill = DNA_content,
+                 color = Condition
+                 ),
+             size = 1,
+             width = 0.5,
+             ) +
+    geom_point(data = Data,
+               aes(x = Serum,
+                   y = Percentage_fc,
+                   color = Condition,
+                   ),
+               fill = "white",
+               position = position_jitter(width = 0.1),
+               shape = 21,
+               size = 1.5
+               ) +
+    facet_grid(Condition ~ DNA_content) +
+    labs(x = "Serum") +
+    scale_color_manual(values = palette[1:2] %>% set_names(c("CTL","IR"))) +
+    scale_fill_manual(values = c(palette[1:2],palette_greys[1:2]) %>%
+                        set_names(c("CTL","IR","G2","G1"))) +
+    labs(title = "Fold Change G1 & G2 Cells After G1-Enrichment",
+         y = "Fold Change (G1-E/no-E)",
+         x = NULL) +
+    guides(fill = guide_legend(title = "DNA Content",
+                               override.aes = list(color = "black")),
+           color = guide_legend(title = NULL,
+                                override.aes = list(fill="white"))
+           ) +
+    theme(strip.background = element_rect(fill = "white"))
+  
+}
+
+# both CTL and IR
+percentage_G1G2_fc_all <- plot_fc_G1_G2(df_DNA_content_fc)
+percentage_G1G2_fc_all
+
+# only IR
+percentage_G1G2_fc <- plot_fc_G1_G2(df_DNA_content_fc %>%
+                filter(Condition == "IR"))
+percentage_G1G2_fc
+
+# # only IR
+# plot_fc_G1_G2(df_DNA_content_fc %>%
+#                 filter(Condition == "IR")) +
+#   labs(title = "Fold Change G1 % (SS vs FS)",
+#        y = "Fold Change (SS vs FS)"
+#        )
+
+# # SS only
+# plot_fc_G1_G2(df_DNA_content_fc %>%
+#                 filter(Condition == "IR", Serum == "SS")) +
+#   labs(title = "Fold Change G1 G2 in IR (SS vs FS)",
+#        y = "Fold Change (SS vs FS)"
+#        )
+
+# # only G2
+# plot_fc_G1_G2(
+#   df_DNA_content_fc %>%
+#     filter(DNA_content == "G2")
+# ) +
+#   facet_grid() +
+#   labs(title = "Fold Change % G1",
+#        x = NULL,
+#        y = "Fold Change")
+```
+
+```{r Figure G1 enrichment,}
+
+placeholder <- ggplot() + theme_void()
+
+# Patchwork v1
+
+layout1 <- "
+AA
+BC
+"
+Fig_G1_Enrichment_v1 <- placeholder +
+  percentage_G1G2 +
+  percentage_G1G2_fc +
+  plot_layout(design = layout1
+              ) +
+  plot_annotation(tag_levels = "a") &
+  theme(plot.title = element_text(size = 10, hjust = 0.5),
+        plot.tag = element_text(size = 12, face = "bold"),
+        plot.margin = margin(),
+        legend.position = "right",
+        legend.margin = margin(l = -0.25, r = 0.1, unit = "cm"),
+        legend.key.size = unit(0.3, "cm"),
+        legend.title = element_blank(),
+        legend.text = element_text(size = 8),
+        axis.title = element_text(size = 8),
+        axis.text = element_text(size = 8),
+        strip.text = element_text(size = 8),
+        strip.background = element_rect(fill = "white")
+        )
+Fig_G1_Enrichment_v1
+
+```
+
