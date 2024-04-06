@@ -388,7 +388,9 @@ df_DNA_content <- df_thresholds %>%
         )
     )) %>%
   # bind CTL and IR Data
-  unnest(cols = Data)
+  unnest(cols = Data) %>%
+  # add col with combination of Condition and Serum
+  mutate(Condition_Serum = str_c(Condition, Serum, sep = "_"))
 
 df_DNA_content
 
@@ -400,12 +402,12 @@ df_DNA_content
 plot_G1G2_percentages <- function(Data) {
   
   # palette
-  palette <- RColorBrewer::brewer.pal(9, "Set1") %>% .[c(3:4)]
+  palette <- RColorBrewer::brewer.pal(9, "Set1") %>% .[c(2:5)]
   palette_greys <- seq(0,1,length.out = 30) %>% grey() %>% .[c(24,28)]
   
   # generate summary df, with mean G1 & G2 %
   Data_Col <- Data %>%
-    group_by(Condition, Serum, DNA_content) %>%
+    group_by(Condition_Serum, Condition, Serum, DNA_content) %>%
     summarise(Percentage = mean(Percentage))
   
   # generate filtered df, with only G1 data, for geom_point
@@ -416,7 +418,7 @@ plot_G1G2_percentages <- function(Data) {
   ggplot(Data,
          aes(x = Serum,
              y = Percentage,
-             color = Condition,
+             color = Condition_Serum,
              fill = DNA_content)) +
     geom_col(data = Data_Col,
              position = "fill",
@@ -435,14 +437,14 @@ plot_G1G2_percentages <- function(Data) {
     facet_grid(. ~ Condition) +
     labs(y = "Percentage",
          x = NULL,
-         title = "% of G1 & G2 Cells With or Without G1-Enrichment") +
-    scale_color_manual(values = palette[1:2] %>% set_names(c("CTL","IR"))) +
+         title = "% of G1 & G2 Cells") +
+    scale_color_manual(values = palette[1:4] %>%
+                         set_names(c("CTL_G1-E", "CTL_no-E","IR_no-E", "IR_G1-E"))) +
     scale_fill_manual(values = palette_greys[1:2]) +
     guides(fill = guide_legend(title = "DNA Content",
                                reverse = TRUE,
                                override.aes = list(color="black", stroke=0.2)),
-           color = guide_legend(title = NULL,
-                                override.aes = list(fill="white")))
+           color = FALSE)
   
 }
 
@@ -484,14 +486,14 @@ df_DNA_content_fc %>%
 ```
 
 
-## plots
+## plot fold change
 
 ```{r plot fold change G1 G2}
   
 plot_fc_G1_G2 <- function(Data) {
   
   # palette
-  palette <- RColorBrewer::brewer.pal(9, "Set1") %>% .[c(3:4)]
+  palette <- RColorBrewer::brewer.pal(9, "Set1") %>% .[c(2:5)]
   palette_greys <- seq(0,1,length.out = 30) %>% grey() %>% .[c(24,28)]
   
   # set DNA_content levels to be G1,G2
@@ -512,7 +514,7 @@ plot_fc_G1_G2 <- function(Data) {
              aes(x = Serum,
                  y = Percentage_fc,
                  fill = DNA_content,
-                 color = Condition
+                 color = Condition_Serum
                  ),
              size = 1,
              width = 0.5,
@@ -520,7 +522,7 @@ plot_fc_G1_G2 <- function(Data) {
     geom_point(data = Data,
                aes(x = Serum,
                    y = Percentage_fc,
-                   color = Condition,
+                   color = Condition_Serum,
                    ),
                fill = "white",
                position = position_jitter(width = 0.1),
@@ -529,16 +531,16 @@ plot_fc_G1_G2 <- function(Data) {
                ) +
     facet_grid(Condition ~ DNA_content) +
     labs(x = "Serum") +
-    scale_color_manual(values = palette[1:2] %>% set_names(c("CTL","IR"))) +
+    scale_color_manual(values = palette[1:4] %>%
+                         set_names(c("CTL_G1-E", "CTL_no-E","IR_no-E", "IR_G1-E"))) +
     scale_fill_manual(values = c(palette[1:2],palette_greys[1:2]) %>%
                         set_names(c("CTL","IR","G2","G1"))) +
-    labs(title = "Fold Change G1 & G2 Cells After G1-Enrichment",
+    labs(title = "Fold Change G1 & G2",
          y = "Fold Change (G1-E/no-E)",
          x = NULL) +
     guides(fill = guide_legend(title = "DNA Content",
                                override.aes = list(color = "black")),
-           color = guide_legend(title = NULL,
-                                override.aes = list(fill="white"))
+           color = FALSE
            ) +
     theme(strip.background = element_rect(fill = "white"))
   
@@ -553,32 +555,11 @@ percentage_G1G2_fc <- plot_fc_G1_G2(df_DNA_content_fc %>%
                 filter(Condition == "IR"))
 percentage_G1G2_fc
 
-# # only IR
-# plot_fc_G1_G2(df_DNA_content_fc %>%
-#                 filter(Condition == "IR")) +
-#   labs(title = "Fold Change G1 % (SS vs FS)",
-#        y = "Fold Change (SS vs FS)"
-#        )
-
-# # SS only
-# plot_fc_G1_G2(df_DNA_content_fc %>%
-#                 filter(Condition == "IR", Serum == "SS")) +
-#   labs(title = "Fold Change G1 G2 in IR (SS vs FS)",
-#        y = "Fold Change (SS vs FS)"
-#        )
-
-# # only G2
-# plot_fc_G1_G2(
-#   df_DNA_content_fc %>%
-#     filter(DNA_content == "G2")
-# ) +
-#   facet_grid() +
-#   labs(title = "Fold Change % G1",
-#        x = NULL,
-#        y = "Fold Change")
 ```
 
-```{r Figure G1 enrichment,}
+# Figure
+
+```{r Figure G1 enrichment}
 
 placeholder <- ggplot() + theme_void()
 
@@ -608,6 +589,28 @@ Fig_G1_Enrichment_v1 <- placeholder +
         strip.background = element_rect(fill = "white")
         )
 Fig_G1_Enrichment_v1
+
+```
+
+```{r save figure, eval=FALSE}
+
+# function png
+save_png <- function(figure, name, width = 7.5, height = 10) {
+  png(paste0("inst/figures/",name,"_", Sys.Date(), ".png"),
+    width = width,
+    height = height,
+    units = "in",
+    family = "sans",
+    bg = "transparent", # doesn't work, bg is actually white
+    res = 600)
+
+  print(figure)
+  
+  dev.off()
+}
+
+# save png
+save_png(Fig_G1_Enrichment_v1, "Fig_G1_Enrichment_v1", height = 4.64)
 
 ```
 
