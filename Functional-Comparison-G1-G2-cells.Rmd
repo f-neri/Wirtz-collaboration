@@ -152,7 +152,8 @@ df_ATB263 <- Paths %>%
             # turn ABT263 col into factor
             factor(.),
           # change IR-G1 to IR-G1-E
-          Condition = str_replace_all(Condition, "^IR-G1$", 'IR-G1-E')
+          Condition = str_replace_all(Condition, "^IR-G1$", 'IR-G1-E'),
+          Condition = str_replace_all(Condition, "^IR$", 'IR-G2-E')
         )
     )
   ) %>%
@@ -222,7 +223,8 @@ df_cell_counts <- df_IL6 %>%
       ~ .x %>%
         mutate(
           # change IR-G1 to IR-G1-E
-          Condition = str_replace_all(Condition, "^IR-G1$", 'IR-G1-E')
+          Condition = str_replace_all(Condition, "^IR-G1$", 'IR-G1-E'),
+          Condition = str_replace_all(Condition, "^IR$", 'IR-G2-E')
         )
     )
   )
@@ -285,26 +287,43 @@ visualize_thresholds <- function(Data, Dead_Cells_Thr, G1_G2_Thr, Too_Large_Cell
     geom_rect(xmin = Dead_Cells_Thr, xmax = G1_G2_Thr,
               ymin = -Inf, ymax = Inf,
               fill = palette_greys[2]) +
+    # G1 label
+    geom_text(
+      x = mean(c(Dead_Cells_Thr, G1_G2_Thr)),
+      y = 750,
+      label = "G1",
+      size = 3.5
+    ) +
     # G2 background
     geom_rect(xmin = G1_G2_Thr, xmax = Too_Large_Cells_Thr,
               ymin = -Inf, ymax = Inf,
               fill = palette_greys[1]) +
+    # G2 label
+    geom_text(
+      x = mean(c(G1_G2_Thr, Too_Large_Cells_Thr)),
+      y = 750,
+      label = "G2",
+      size = 3.5
+    ) +
+    # histogram
     geom_histogram(
       aes(x = DAPI,
           fill = Condition),
-      binwidth = quantile(Data$DAPI, 0.95)/150) +
+      binwidth = quantile(Data$DAPI, 1.0)/150) +
+    # thresholds
     geom_vline(xintercept = Dead_Cells_Thr,
                color = "red") +
     geom_vline(xintercept = G1_G2_Thr) +
     geom_vline(xintercept = Too_Large_Cells_Thr,
                color = "red") +
     facet_grid(rows = vars(Condition)) +
-    labs(title = "DNA Content Distribution in IR and IR-G1-E Cells",
-         y = "Counts",
+    labs(title = "DNA Content Distribution in IR-G1-E and IR-G2-E Cells",
+         y = "Cell Counts",
          x = "DNA Content (DAPI, A.U.)",
          fill = "Condition") +
-    scale_x_continuous(limits = c(0,quantile(Data$DAPI, 0.95))) +
-    scale_fill_manual(values = c(CTL = palette[1], IR = palette[2], `IR-G1-E` = palette[3])) +
+    # scale_x_continuous(limits = c(0,quantile(Data$DAPI, 0.95))) +
+    scale_fill_manual(values = c(CTL = palette[1], `IR-G2-E` = palette[2], `IR-G1-E` = palette[3])) +
+    scale_y_continuous(limits = c(NA, 800)) +
     theme(# axis.text.x = element_text(angle = 45, hjust = 1),
           strip.background = element_rect(fill = "white"))
 }
@@ -314,10 +333,20 @@ visualize_thresholds <- function(Data, Dead_Cells_Thr, G1_G2_Thr, Too_Large_Cell
 plots_DNA_content_IL6 <- df_thresholds %>%
   # filter out CTL cells
   mutate(
-    Data = map(Data, ~ filter(.x, Condition != "CTL"))
+    Data = pmap(
+      list(Data, Dead_Cells_Thr, Too_Large_Cells_Thr),
+      function(Data, Dead_Cells_Thr, Too_Large_Cells_Thr)
+        Data %>%
+        filter(Condition != "CTL",
+               DAPI > (Dead_Cells_Thr*0.5) & DAPI < (Too_Large_Cells_Thr + Dead_Cells_Thr*0.5)
+               )
+    )
   ) %>%
   select(Data, Dead_Cells_Thr, G1_G2_Thr, Too_Large_Cells_Thr) %>%
   pmap(visualize_thresholds)
+
+# # cut x axis to remove dying cells/debris
+# plots_DNA_content_IL6[[2]] <- plots_DNA_content_IL6[[2]] + coord_cartesian(xlim = c(1.7e+6, NA))
 
 plots_DNA_content_IL6
 
@@ -326,7 +355,7 @@ plots_DNA_content_IL6[[1]] + labs(title = "Exp. 1") +
   plots_DNA_content_IL6[[3]] + labs(title = "Exp. 3") +
   plot_layout(nrow = 1,
               guides = "collect") +
-  plot_annotation(title = "DNA Content Distribution in IR and IR-G1-E Cells")
+  plot_annotation(title = "DNA Content Distribution in IR-G1-E and IR-G2-E Cells")
 
 ```
 
@@ -365,6 +394,24 @@ df_DNA_content_IL6 <- df_thresholds %>%
 
 ```
 
+```{r stats G1G2_percentages IL6}
+
+# test for difference in G1-G2 % between veh-treated IR-G2 and IR-G1 populations
+test_results_G1G2_shift <- df_DNA_content_IL6 %>%
+  select(Dataset, Data) %>%
+  unnest(Data) %>%
+  # remove CTL samples
+  filter(
+    Condition != "CTL",
+    DNA_content == "G1"
+  ) %>%
+  wilcox.test(Percentage ~ Condition, data = .) %>% .$p.value
+
+"p-value of G1 % comparison between IR-G1-E and IR-G2-E:"
+test_results_G1G2_shift
+
+```
+
 ```{r plot_G1G2_percentages IL6}
 
 plot_G1G2_percentages <- function(Data) {
@@ -399,7 +446,7 @@ plot_G1G2_percentages <- function(Data) {
     geom_point(data = Data_Filtered,
                fill = "white",
                shape = 21,
-               size = 1.5,
+               # size = 1.5,
                position = position_jitter(0.1)
                # position = position_jitterdodge(jitter.width = 0.1, dodge.width = 0.8)
                ) +
@@ -409,11 +456,13 @@ plot_G1G2_percentages <- function(Data) {
     labs(y = "Percentage",
          x = NULL,
          title = "% of G1 and G2 Cells per Sample") +
-    scale_color_manual(values = palette[1:3] %>% set_names(c("CTL","IR","IR-G1-E"))) +
+    scale_color_manual(values = palette[1:3] %>% set_names(c("CTL","IR-G2-E","IR-G1-E"))) +
     scale_fill_manual(values = c(palette_greys[1], palette_greys[2])) +
     guides(fill = guide_legend(title = "DNA Content",
                                override.aes = list(color="black", stroke=0.2)),
-           color = "none")
+           color = guide_legend(title = "Condition",
+                                override.aes = list(fill="white"))
+           )
   
 }
 
@@ -430,7 +479,13 @@ G1G2_percentages_plot_IL6 <-  df_DNA_content_IL6 %>%
   unnest(Data) %>%
   # remove CTL samples
   filter(Condition != "CTL") %>%
-  plot_G1G2_percentages()
+  plot_G1G2_percentages() +
+  # add pvalue
+  geom_segment(x=1, xend=2, y=1.05,
+               color = "black") +
+  geom_text(x = 1.5, y = 1.05, label = "****",
+            color = "black", vjust = -0.2, size = 3) +
+  scale_y_continuous(limits = c(0,1.1), breaks = seq(0,1,by=0.2), labels = scales::percent)
 
 G1G2_percentages_plot_IL6
 
@@ -455,7 +510,10 @@ df_ELISA <- df_IL6 %>%
                     ) %>%
           ungroup() %>%
           # adjust Condition names (change IR-G1 to IR-G1-E)
-          mutate(Condition = str_replace_all(Condition, "^IR-G1$", 'IR-G1-E'))
+          mutate(
+            Condition = str_replace_all(Condition, "^IR-G1$", 'IR-G1-E'),
+            Condition = str_replace_all(Condition, "^IR$", 'IR-G2-E'),
+            )
         )
     ) %>%
   # remove unnecessary cols
@@ -583,20 +641,20 @@ test_results_IL6 <- post_hoc_result$Condition %>%
   # simplify
   select(Comparison, p_adj) %>%
   mutate(
-    # Split the "Comparison" column based on the position of the last "-"
-    Pos_Last_Hyphen = str_locate_all(Comparison, "-") %>%
+    # Split the "Comparison" column based on the position of the first "E-"
+    Pos_E_Hyphen = str_locate_all(Comparison, "E-") %>%
       map(
         ~ .x %>%
           # turn vector into tibble
           as_tibble %>%
           # retrieve last row in tibble
           filter(row_number(.) == nrow(.)) %>%
-          # extract start position for "-"
+          # extract start position for "E-"
           .$start
         ) %>%
       flatten_int(),
-    Condition1 = str_sub(Comparison, 1, Pos_Last_Hyphen-1),
-    Condition2 = str_sub(Comparison, Pos_Last_Hyphen+1, str_length(Comparison)),
+    Condition1 = str_sub(Comparison, 1, Pos_E_Hyphen),
+    Condition2 = str_sub(Comparison, Pos_E_Hyphen+2, str_length(Comparison)),
     # Get x and xend
     ## match Conditions to the factor levels
     Condition1_level = Condition1 %>%
@@ -644,8 +702,8 @@ plot_IL6_concentrations <- function(data, y, ylab) {
                position = position_jitter(width = 0.1)) +
     labs(y = ylab,
          x = NULL) +
-    scale_color_manual(values = palette) +
-    scale_fill_manual(values = palette) +
+    scale_color_manual(values = palette %>% set_names(c("CTL","IR-G2-E","IR-G1-E"))) +
+    scale_fill_manual(values = palette %>% set_names(c("CTL","IR-G2-E","IR-G1-E"))) +
     ylim(c(0,NA))
 }
 
@@ -725,8 +783,8 @@ plot_IL6_concentrations_abs <- function(data, y, ylab, test_results) {
     ) +
     labs(y = ylab,
          x = NULL) +
-    scale_color_manual(values = palette) +
-    scale_fill_manual(values = palette) +
+    scale_color_manual(values = palette %>% set_names(c("CTL","IR-G2-E","IR-G1-E"))) +
+    scale_fill_manual(values = palette %>% set_names(c("CTL","IR-G2-E","IR-G1-E"))) +
     ylim(c(0, test_results$y %>% max()*1.1))
 }
 
@@ -739,10 +797,10 @@ IL6_plots$absolute <- plot_IL6_concentrations_abs(
   y = "Concentration",
   ylab = "IL-6 per Cell (pg/mL)",
   test_results = test_results_IL6 %>%
-    filter(Comparison != "IR-G1-E-CTL")
+    filter(Comparison != "IR-G2-E-CTL")
 )
 
-IL6_plots
+IL6_plots$absolute
 
 ```
 
@@ -795,12 +853,12 @@ visualize_thresholds <- function(Data, Dead_Cells_Thr, G1_G2_Thr, Too_Large_Cell
     geom_vline(xintercept = Too_Large_Cells_Thr,
                color = "red") +
     facet_grid(rows = vars(Condition)) +
-    labs(title = "DNA Content Distribution in IR and IR-G1-E Cells",
+    labs(title = "DNA Content Distribution in IR-G1-E and IR-G2-E Cells",
          y = "Counts",
          x = "DNA Content (DAPI, A.U.)",
          fill = "Condition") +
     scale_x_continuous(limits = c(0,quantile(Data$DAPI, 0.95))) +
-    scale_fill_manual(values = c(CTL = palette[1], IR = palette[2], `IR-G1-E` = palette[3])) +
+    scale_fill_manual(values = c(CTL = palette[1], `IR-G2-E` = palette[2], `IR-G1-E` = palette[3])) +
     theme(# axis.text.x = element_text(angle = 45, hjust = 1),
           strip.background = element_rect(fill = "white"))
 }
@@ -826,7 +884,7 @@ plots_DNA_content_ABT263[[1]] + labs(title = "Exp. 1") +
   plots_DNA_content_ABT263[[3]] + labs(title = "Exp. 3") +
   plot_layout(nrow = 1,
               guides = "collect") +
-  plot_annotation(title = "DNA Content Distribution in IR and IR-G1-E Cells")
+  plot_annotation(title = "DNA Content Distribution in IR-G1-E and IR-G2-E Cells")
 
 # visualize thresholds for all ABT263 concentrations
 df_thresholds %>%
@@ -869,7 +927,7 @@ df_DNA_content_ABT263 <- df_thresholds %>%
         # turn col into factor
         mutate(
           DNA_content = factor(DNA_content, levels = c("G2", "G1")),
-          Condition = factor(Condition, levels = c("CTL","IR","IR-G1-E"))
+          Condition = factor(Condition, levels = c("CTL","IR-G1-E","IR-G2-E"))
         )
     )
   )
@@ -918,7 +976,7 @@ plot_G1G2_percentages_ABT623 <- function(Data) {
     labs(y = "Percentage",
          x = NULL,
          title = "% of G1 and G2 Cells per Sample") +
-    scale_color_manual(values = palette[1:3] %>% set_names(c("CTL","IR","IR-G1-E"))) +
+    scale_color_manual(values = palette[1:3] %>% set_names(c("CTL","IR-G2-E","IR-G1-E"))) +
     scale_fill_manual(values = c(palette_greys[1], palette_greys[2])) +
     guides(fill = guide_legend(title = "DNA Content",
                                override.aes = list(color="black", stroke=0.2)),
@@ -1308,8 +1366,8 @@ plot_ABT263_viability <- function(Data,
                        limits = c(NA,NA)) +
     labs(y = "Cell Counts Normalized to Vehicle", # or "Viability" ?
          x = "ABT263 (µM)") +
-    scale_color_manual(values = palette) +
-    scale_fill_manual(values = palette)
+    scale_color_manual(values = palette %>% set_names(c("CTL","IR-G2-E","IR-G1-E"))) +
+    scale_fill_manual(values = palette %>% set_names(c("CTL","IR-G2-E","IR-G1-E")))
 }
 ```
 
@@ -1424,7 +1482,7 @@ plot_ABT263_viability_G1G2 <- function(Data,
     labs(y = "Cell Counts Normalized to Vehicle", # or "Viability" ?
          x = "ABT263 (µM)") +
     scale_color_manual(values = palette_greys[c(1,2)] %>% set_names(c("G2","G1"))) +
-    scale_fill_manual(values = palette[1:3] %>% set_names(c("CTL","IR","IR-G1-E"))) +
+    scale_fill_manual(values = palette[1:3] %>% set_names(c("CTL","IR-G2-E","IR-G1-E"))) +
     # # add black square around color aes
     # guides(color = guide_legend(
     #   theme = theme(legend.key = element_rect(color = "black"))
@@ -1448,7 +1506,7 @@ ABT263_viability_G1G2
 
 ```
 
-# Figure: Functional Differences in IR vs IR-G1-E Populations
+# Figure: Functional Differences in IR-G2-E vs IR-G1-E Populations
 
 ```{r Figure Functional Differences in IR vs IR-G1-E Populations, fig.asp=1.33}
 
@@ -1503,20 +1561,19 @@ GGHHH
 
 Fig_Functional_Experiments_v2 <- Workflow +
   plots_DNA_content_IL6[[2]] + labs(title = "DNA Content Distribution") +
-  G1G2_percentages_plot_IL6 + labs(title = "% G1 & G2") +
+  G1G2_percentages_plot_IL6 + labs(title = "% G1 & G2") + 
   IL6_plots$absolute + labs(title = "IL-6 Secretion") +
   Workflow +
   G1G2_percentages_plot_ABT263 + labs(title = "% G1 & G2") +
-  Workflow +
-  #ABT263_viability + labs(title = "ABT263 Susceptibility\nIR vs IR-G1-E") +
-  ABT263_viability_G1G2 + labs(title = "ABT263 Susceptibility\nWithin IR & IR-G1-E Subpopulations (G1 vs G2)") +
+  ABT263_viability + labs(title = "ABT263 Susceptibility\nIR-G1-E vs IR-G2-E") +
+  ABT263_viability_G1G2 + labs(title = "ABT263 Susceptibility\nWithin IR-G1-E & IR-G2-E Subpopulations (G1 vs G2)") +
   plot_layout(design = layout2,
               # widths = c(2,1,2),
               guides = "keep") +
   plot_annotation(tag_levels = "a") &
   theme(plot.title = element_text(size = 10, hjust = 0.5),
-        plot.tag = element_text(size = 12, face = "bold"),
-        plot.margin = margin(),
+        plot.tag = element_text(size = 12, face = "bold", vjust = 2),
+        plot.margin = margin(t = 0.5, unit = "cm"),
         legend.position = "right",
         legend.margin = margin(l = -0.25, r = 0.1, unit = "cm"),
         legend.key.size = unit(0.3, "cm"),
@@ -1528,6 +1585,18 @@ Fig_Functional_Experiments_v2 <- Workflow +
         strip.background = element_rect(fill = "white")
         )
 
+# remove margin above panel a
+Fig_Functional_Experiments_v2[[1]] <- Fig_Functional_Experiments_v2[[1]] +
+  theme(plot.margin = margin())
+
+# remove x axis labels from stacked bar plots
+Fig_Functional_Experiments_v2[[3]] <- Fig_Functional_Experiments_v2[[3]] +
+  theme(axis.text.x = element_blank())
+
+Fig_Functional_Experiments_v2[[6]] <- Fig_Functional_Experiments_v2[[6]] +
+  theme(axis.text.x = element_blank())
+
+# print plot 
 Fig_Functional_Experiments_v2
 
 ```
@@ -1550,12 +1619,13 @@ save_png <- function(figure, name, width = 7.5, height = 10) {
 }
 
 # save png
-save_png(Fig_Functional_Experiments_v2, "Fig_Functional_Experiments_v2")
+save_png(Fig_Functional_Experiments_v2, "Fig_Functional_Experiments_v2_count")
 
-ABT263_viability <- ABT263_viability + labs(title = "ABT263 Susceptibility\nIR vs IR-G1-E") +
+# save ABT263_viability
+ABT263_viability <- ABT263_viability + labs(title = "ABT263 Susceptibility\nIR-G1-E vs IR-G2-E") +
 theme(plot.title = element_text(size = 10, hjust = 0.5),
-        plot.tag = element_text(size = 12, face = "bold"),
-        plot.margin = margin(),
+        plot.tag = element_text(size = 12, face = "bold", vjust = 2),
+        plot.margin = margin(t = 0.5, unit = "cm"),
         legend.position = "right",
         legend.margin = margin(l = -0.25, r = 0.1, unit = "cm"),
         legend.key.size = unit(0.3, "cm"),

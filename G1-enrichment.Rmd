@@ -208,11 +208,11 @@ df <- bind_rows(plates) %>%
   # change Serum values
   mutate(
     Serum = case_when(
-      Serum == "FS" ~ "no-E",
+      Serum == "FS" ~ "G2-E",
       Serum == "SS" ~ "G1-E",
       TRUE ~ Serum
     ),
-    Serum = factor(Serum, levels = c("no-E","G1-E"))
+    Serum = factor(Serum, levels = c("G2-E","G1-E"))
   )
 
 df
@@ -439,12 +439,14 @@ plot_G1G2_percentages <- function(Data) {
          x = NULL,
          title = "% of G1 & G2 Cells") +
     scale_color_manual(values = palette[1:4] %>%
-                         set_names(c("CTL_G1-E", "CTL_no-E","IR_no-E", "IR_G1-E"))) +
+                         set_names(c("CTL_G1-E", "CTL_G2-E","IR_G2-E", "IR_G1-E"))) +
     scale_fill_manual(values = palette_greys[1:2]) +
     guides(fill = guide_legend(title = "DNA Content",
                                reverse = TRUE,
                                override.aes = list(color="black", stroke=0.2)),
-           color = FALSE)
+           color = guide_legend(title = "Condition",
+                                override.aes = list(fill = "white"))
+           )
   
 }
 
@@ -461,7 +463,7 @@ df_DNA_content_fc <- df_DNA_content %>%
     vars_to_normalize = "Percentage",
     grouping_arguments = c("Condition", "Serum", "DNA_content"),
     normalization_variable = "Serum",
-    normalization_value = "no-E"
+    normalization_value = "G2-E"
   ) %>%
   # add key that combines Condition and Serum
   mutate(
@@ -532,15 +534,16 @@ plot_fc_G1_G2 <- function(Data) {
     facet_grid(Condition ~ DNA_content) +
     labs(x = "Serum") +
     scale_color_manual(values = palette[1:4] %>%
-                         set_names(c("CTL_G1-E", "CTL_no-E","IR_no-E", "IR_G1-E"))) +
+                         set_names(c("CTL_G1-E", "CTL_G2-E","IR_G2-E", "IR_G1-E"))) +
     scale_fill_manual(values = c(palette[1:2],palette_greys[1:2]) %>%
                         set_names(c("CTL","IR","G2","G1"))) +
     labs(title = "Fold Change G1 & G2",
-         y = "Fold Change (G1-E/no-E)",
+         y = "Fold Change (G1-E/G2-E)",
          x = NULL) +
     guides(fill = guide_legend(title = "DNA Content",
                                override.aes = list(color = "black")),
-           color = FALSE
+           color = guide_legend(title = "Condition",
+                                override.aes = list(fill = "white"))
            ) +
     theme(strip.background = element_rect(fill = "white"))
   
@@ -552,7 +555,8 @@ percentage_G1G2_fc_all
 
 # only IR
 percentage_G1G2_fc <- plot_fc_G1_G2(df_DNA_content_fc %>%
-                filter(Condition == "IR"))
+                filter(Condition == "IR")) +
+  facet_grid(. ~ DNA_content)
 percentage_G1G2_fc
 
 ```
@@ -569,15 +573,15 @@ layout1 <- "
 AA
 BC
 "
-Fig_G1_Enrichment_v1 <- placeholder +
+Fig_G1_Enrichment_v1.1 <- placeholder +
   percentage_G1G2 +
   percentage_G1G2_fc +
   plot_layout(design = layout1
               ) +
   plot_annotation(tag_levels = "a") &
   theme(plot.title = element_text(size = 10, hjust = 0.5),
-        plot.tag = element_text(size = 12, face = "bold"),
-        plot.margin = margin(),
+        plot.tag = element_text(size = 12, face = "bold", vjust = 2),
+        plot.margin = margin(t = 0.5, unit = "cm"),
         legend.position = "right",
         legend.margin = margin(l = -0.25, r = 0.1, unit = "cm"),
         legend.key.size = unit(0.3, "cm"),
@@ -588,7 +592,12 @@ Fig_G1_Enrichment_v1 <- placeholder +
         strip.text = element_text(size = 8),
         strip.background = element_rect(fill = "white")
         )
-Fig_G1_Enrichment_v1
+
+# remove margin above panel a
+Fig_G1_Enrichment_v1.1[[1]] <- Fig_G1_Enrichment_v1.1[[1]] +
+  theme(plot.margin = margin())
+
+Fig_G1_Enrichment_v1.1
 
 ```
 
@@ -610,7 +619,7 @@ save_png <- function(figure, name, width = 7.5, height = 10) {
 }
 
 # save png
-save_png(Fig_G1_Enrichment_v1, "Fig_G1_Enrichment_v1", height = 4.64)
+save_png(Fig_G1_Enrichment_v1.1, "Fig_G1_Enrichment_v1.1", height = 4.64)
 
 ```
 

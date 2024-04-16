@@ -635,7 +635,7 @@ SABGal_EdU_test_results
 plot_single_marker <- function(data, y, ylab, title, test_results, ymax_multiplier = 1.1) {
   
   # palette
-  palette <- RColorBrewer::brewer.pal(8, "Accent")
+  palette <- RColorBrewer::brewer.pal(9, "Set1") %>% .[c(3:4)]
   
   # generate summary data for geom_col
   summary_data <- data %>%
@@ -676,14 +676,13 @@ plot_single_marker <- function(data, y, ylab, title, test_results, ymax_multipli
               ) +
     geom_col(data = summary_data,
              aes(x = Cell.Type,
-                 y = median,
+                 y = mean,
                  fill = Condition),
              color = "black",
              # fill = "white",
              width = 0.7,
              position = position_dodge(width = 0.8)) +
-    geom_point(size=2,
-               alpha=1/1.2,
+    geom_point(alpha=1/1.2,
                shape = 21,
                aes(fill = Condition),
                position = position_jitterdodge(dodge.width = 0.8,
@@ -732,6 +731,94 @@ plot_single_marker <- function(data, y, ylab, title, test_results, ymax_multipli
 }
 
 ```
+
+```{r function plot single marker log10}
+
+plot_single_marker_log10 <- function(data, y, ylab, title, test_results, ymax_multiplier = 2.0) {
+  
+  # palette
+  palette <- RColorBrewer::brewer.pal(9, "Set1") %>% .[c(3:4)]
+  
+  # generate summary data for geom_col
+  summary_data <- data %>%
+    group_by(Cell.Type, Condition, Serum) %>%
+    mutate(median = median(!!sym(y)),
+           mean = mean(!!sym(y)),
+           sd = sd(!!sym(y)))
+  
+  # adjust test_results based on selected y/variable
+  test_results <- test_results %>%
+    filter(
+      # filter for Variable
+      Variable == y,
+      # filter for Serum groups present in data
+      Serum %in% unique(data$Serum)
+    )
+  ## filter for Channel 3 groups if present in data
+    if (any(names(test_results) %in% "Channel3")) {
+       test_results <- test_results %>%
+         filter(Channel3 %in% unique(data$Channel3))
+    }
+  
+  # calculate adjusted ymax to plot stats (geom segment & text)
+  test_results <- test_results %>%
+    mutate(
+      ymax_adjusted = ymax * 10^(ymax_multiplier-1)
+    )
+  
+  # plot
+  p <- ggplot(data,
+              aes(y = !!sym(y),
+              x = Cell.Type)
+              ) +
+    geom_col(data = summary_data,
+             aes(x = Cell.Type,
+                 y = median,
+                 fill = Condition),
+             color = "black",
+             # fill = "white",
+             width = 0.7,
+             position = position_dodge(width = 0.8)) +
+    geom_point(size=2,
+               alpha=1/1.2,
+               shape = 21,
+               aes(fill = Condition),
+               position = position_jitterdodge(dodge.width = 0.8,
+                                               jitter.width = 0.5, jitter.height = 0)
+               ) +
+    # add stats
+    ## line
+    geom_segment(
+      data = test_results,
+      aes(x = x_position-0.2, xend = x_position+0.2,
+          y = ymax_adjusted)
+      ) +
+    ## label
+    geom_text(
+      data = test_results,
+      aes(x = x_position,
+          y = ymax_adjusted,
+          label = annotation
+          ),
+      size = 3, vjust = -0.5
+    ) +
+    facet_grid(. ~ Serum) +
+    scale_color_manual(values = palette) +
+    scale_fill_manual(values = palette) +
+    scale_y_continuous(transform = "log10") +
+    coord_cartesian(ylim = c(NA, test_results$ymax %>% max(.) * 10^(ymax_multiplier+0.5))) +
+    labs(title = title,
+         y = ylab) +
+    guides(color = guide_legend(override.aes = list(shape=21))) +
+    theme(plot.title = element_text(hjust = 0.5),
+          axis.title.x = element_blank())
+  
+  # print plot
+  p
+}
+
+```
+
 
 ```{r plot single marker}
 
@@ -1574,7 +1661,7 @@ list_df_Morph_FS <- map(
 
 plot_Morph <- function(data, y, ylab) {
   
-  palette <- RColorBrewer::brewer.pal(8, "Accent")
+  palette <- RColorBrewer::brewer.pal(9, "Set1") %>% .[c(3:4)]
   palette_greys <- c(`3` = "#000000", `2` = "#737373", `1` = "#CCCCCC")
   
   ggplot(data,
@@ -1608,7 +1695,7 @@ plot_Morph <- function(data, y, ylab) {
 plot_Morph_summary <- function(data, y, ylab) {
   
   
-  palette <- RColorBrewer::brewer.pal(8, "Accent")
+  palette <- RColorBrewer::brewer.pal(9, "Set1") %>% .[c(3:4)]
   palette_greys <- c(`3` = "#000000", `2` = "#737373", `1` = "#CCCCCC")
   
   ggplot(data,
@@ -1648,7 +1735,7 @@ plot_Morph_summary <- function(data, y, ylab) {
 plot_Morph_summary_allds <- function(data, y, ylab) {
   
   
-  palette <- RColorBrewer::brewer.pal(8, "Accent")
+  palette <- RColorBrewer::brewer.pal(9, "Set1") %>% .[c(3:4)]
   palette_greys <- c(`3` = "#000000", `2` = "#737373", `1` = "#CCCCCC")
   
   ggplot(data,
@@ -1731,11 +1818,13 @@ Morph_summary_allds
 FS_SS <- list_df_Morph$alldp %>%
   # remove dataset 1 because of low cell counts
   filter(Dataset != 1) %>%
-  # turn categorical vars into factors
   mutate(
+    # turn categorical vars into factors
     Condition = factor(Condition),
     Serum = factor(Serum),
-    Cell.Type = factor(Cell.Type)
+    Cell.Type = factor(Cell.Type),
+    # change Area unit from px^2 to µm^2 (1 px = 0.65 µm)
+    Narea_overall = Narea_overall * 0.65^2
   )
 
 df_single_marker_Morph <- FS_SS %>%
@@ -2235,26 +2324,48 @@ HI
 HI
 "
 
-Fig_PopData_v6.5 <- Panel_Representative_Images +
+Fig_PopData_v6.7 <- Panel_Representative_Images +
   SABGal_EdU_plots$FS_SS_SABGal + SABGal_EdU_plots$FS_SS_EdU +
   ICC_yH2AX$FS_SS_yH2AX + ICC_2ndMarkers$FS_SS_p21 +
   ICC_2ndMarkers$FS_SS_LaminB1 + ICC_2ndMarkers$FS_SS_HMGB1 +
   Morph_plots$FS_SS_Area + Morph_plots$FS_SS_SF + coord_cartesian(ylim = c(0.6,1.2)) +
   plot_layout(design = layout5,
-              guides = "collect") +
-  plot_annotation(tag_levels = list(c("", "", "", "", "", "", "", "", ""))) &
-  theme(plot.title = element_text(size = 10),
-        plot.tag = element_text(size = 12, face = "bold"),
-        legend.position = "top",
-        legend.key.size = unit(0.5, "cm"),
-        axis.title = element_text(size = 10),
+              guides = "keep") +
+  plot_annotation(tag_levels = list(c("a", "b", "", "c", "", "#", "#", "d", ""))) &
+  theme(plot.title = element_text(size = 10, hjust = 0.5),
+        plot.tag = element_text(size = 12, face = "bold", vjust = 2),
+        plot.margin = margin(t = 0.5, unit = "cm"),
+        legend.position = "right",
+        legend.margin = margin(l = -0.25, r = 0.1, unit = "cm"),
+        legend.key.size = unit(0.3, "cm"),
+        legend.title = element_blank(),
+        legend.text = element_text(size = 8),
+        axis.title = element_text(size = 8),
         axis.text = element_text(size = 8),
-        axis.text.x = element_text(size = 8),
         strip.text = element_text(size = 8),
         strip.background = element_rect(fill = "white")
         )
 
-Fig_PopData_v6.5
+# remove top margin in panel a
+
+Fig_PopData_v6.7[[1]] <- Fig_PopData_v6.7[[1]] +
+  theme(plot.margin = margin())
+
+# remove empty empty space between 1st and 2nd row of ICC panel
+
+Fig_PopData_v6.7[[6]] <- Fig_PopData_v6.7[[6]] +
+  theme(plot.tag = element_blank(),
+        plot.margin = margin(t = 0.2, unit = "cm")
+        )
+
+Fig_PopData_v6.7[[7]] <- Fig_PopData_v6.7[[7]] +
+  theme(plot.tag = element_blank(),
+        plot.margin = margin(t = 0.2, unit = "cm")
+        )
+
+# print figure
+
+Fig_PopData_v6.7
 
 ```
 
@@ -2262,26 +2373,6 @@ Fig_PopData_v6.5
 **Fig. 1 Senescence Validation and Population-Level Analysis**. **a**) Workflow for high-content image analysis of senescent cells. Primary human lung HMVEC-L endothelial cells and IMM-90 fibroblasts were mock treated (CTL) or induced to senescence using ionizing radiation (SEN). For both cell types, microplates were co-stained for senescence-associated markers (SA-B-Gal and EdU, or $\gamma$H2AX and LaminB1, HMBG1, or p21.  **b**) Representative images of primary human lung HMVEC-L endothelial cells and IMR-90 fibroblasts induced to senescence via ionizing radiation (IR) and mock-treated non-senescent controls (CTL). Cells were either cultured always in full serum (FS) or cultured in full serum until three days before sample collection and then switched to serum-starved conditions (SS). Samples were stained for the senescence-associated markers SA-$\beta$-Gal and EdU. **c**) Quantification of (a), showing percentages of SA-$\beta$-Gal- and EdU-positive cells per well (mean ± SD, n = 9). **d**) Representative ICC images of HMVEC-L and IMR-90 stained for $\gamma$H2AX in combination with other senescence-associated markers: HMGB1, Lamin B1, or p21.**e**) Quantification of (c), showing the relative changes in senescence markers expression between IR and CTL cells (mean fold change ± SD, n = 4). **f-h**) Quantification of nuclear morphological features: nuclear area (e), aspect ratio (ASP, f), and shape factor (SF) (mean ± SD, n = 12).
 
 ```{r save Fig1, eval=FALSE}
-
-# pdf
-save_pdf <- function(figure, name) {
-  
-  pdf(paste0("inst/figures/Population-Analysis_",name,"_", Sys.Date(), ".pdf"),
-    width = 7.5,
-    height = 10,
-    family = "sans",
-    compress = F)
-
-  print(figure)
-  
-  dev.off()
-  
-}
-
-pmap(list(Figure1,
-          c("summary_allds", "summary", "alldp")
-          ),
-    save_pdf)
 
 # png
 save_png <- function(figure, name) {
@@ -2298,19 +2389,12 @@ save_png <- function(figure, name) {
   dev.off()
 }
 
-pmap(list("figure" = Figure1,
-          "name" = c("summary_allds", "summary", "alldp")
-          ),
-    save_png)
-
 # save_png(Fig_PopData_v6.2, "Fig_PopData_v6.2")
-save_png(Fig_PopData_v6.5, "Fig_PopData_v6.5")
+save_png(Fig_PopData_v6.7, "Fig_PopData_v6.7")
 
 ```
 
 ```{r Notes, eval=FALSE}
-
-rmarkdown::render()
 
 ```
 
