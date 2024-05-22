@@ -453,6 +453,7 @@ plot_G1G2_percentages <- function(Data) {
     scale_y_continuous(limits = c(0,1),
                        breaks = seq(0,1, by = 0.2),
                        labels = percent) +
+    scale_x_discrete(labels = c("CTL"="CTL","IR-G2-E"="G2-E","IR-G1-E"="G1-E")) +
     labs(y = "Percentage",
          x = NULL,
          title = "% of G1 and G2 Cells per Sample") +
@@ -490,6 +491,15 @@ G1G2_percentages_plot_IL6 <-  df_DNA_content_IL6 %>%
 G1G2_percentages_plot_IL6
 
 ```
+
+```{r IL6 sample count}
+df_DNA_content_IL6 %>%
+  select(Dataset, Data) %>%
+  unnest(Data) %>%
+  group_by(Condition, DNA_content) %>%
+  summarise(well_count = n())
+```
+
 
 ## IL-6 concentrations
 
@@ -1068,6 +1078,15 @@ G1G2_percentages_plot_ABT263
 
 ```
 
+```{r ABT263 well count}
+df_DNA_content_ABT263 %>%
+  select(Dataset, Data) %>%
+  unnest(Data) %>%
+  group_by(Condition, ABT263, DNA_content) %>%
+  summarize(well_count = n())
+```
+
+
 ## Viability
 
 ```{r Data_ABT263}
@@ -1570,7 +1589,7 @@ Fig_Functional_Experiments_v2 <- Workflow +
   plot_layout(design = layout2,
               # widths = c(2,1,2),
               guides = "keep") +
-  plot_annotation(tag_levels = "a") &
+  plot_annotation(tag_levels = "A") &
   theme(plot.title = element_text(size = 10, hjust = 0.5),
         plot.tag = element_text(size = 12, face = "bold", vjust = 2),
         plot.margin = margin(t = 0.5, unit = "cm"),
@@ -1591,10 +1610,10 @@ Fig_Functional_Experiments_v2[[1]] <- Fig_Functional_Experiments_v2[[1]] +
 
 # remove x axis labels from stacked bar plots
 Fig_Functional_Experiments_v2[[3]] <- Fig_Functional_Experiments_v2[[3]] +
-  theme(axis.text.x = element_blank())
+  theme(axis.text.x = element_text(size = 7.5))
 
 Fig_Functional_Experiments_v2[[6]] <- Fig_Functional_Experiments_v2[[6]] +
-  theme(axis.text.x = element_blank())
+  theme(axis.text.x = element_text(size = 7.5))
 
 # print plot 
 Fig_Functional_Experiments_v2

@@ -396,6 +396,30 @@ df_DNA_content
 
 ```
 
+```{r stats df_DNA_content}
+
+# Compare % of G1 cells in G2-E vs G1-E, both for CTL and IR conditions
+df_DNA_content %>%
+  # Compare G1/G2 DNA content using G1 % as reference
+  filter(DNA_content == "G1") %>%
+  # split data in CTL and IR groups
+  nest(.by = Condition) %>%
+  # test differences in G1 % based on Serum (G2-E vs G1-E)
+  mutate(
+    p_value = map_dbl(
+      data,
+      ~ .x %>%
+        # calculate p-value with Mann-Whitney
+        wilcox.test(Percentage ~ Serum, data = .) %>%
+        # tidy test output
+        broom::tidy() %>%
+        # extract p-value
+        .$p.value
+    )
+  )
+
+```
+
 
 ```{r plot_G1G2_percentages}
 
@@ -452,9 +476,25 @@ plot_G1G2_percentages <- function(Data) {
 
 percentage_G1G2 <- plot_G1G2_percentages(df_DNA_content)
 
-percentage_G1G2
+percentage_G1G2 <- percentage_G1G2 +
+  # add pvalue
+  geom_segment(x=1, xend=2, y=1.05,
+               color = "black") +
+  geom_text(x = 1.5, y = 1.05, label = "****",
+            color = "black", vjust = -0.2, size = 3) +
+  scale_y_continuous(limits = c(0,1.1), breaks = seq(0,1,by=0.2), labels = scales::percent)
+
 
 ```
+
+```{r well count}
+
+df_DNA_content %>%
+  group_by(Condition, Serum, DNA_content) %>%
+  summarize(well_count = n())
+
+```
+
 
 ```{r fold change G1 G2}
 
@@ -477,13 +517,65 @@ df_DNA_content_fc <- df_DNA_content %>%
 
 ```{r stats fold change G2}
 
+# Compare G1/G2 % fold change in IR-G1-E vs IR-G2-E
 df_DNA_content_fc %>%
-  filter(
-    DNA_content == "G1",
-    Serum == "G1-E"
-    ) %>%
-  wilcox.test(Percentage_fc ~ Condition, data = .) %>%
-  broom::tidy()
+  # consider IR cells only
+  filter(Condition == "IR") %>%
+  # split data in G1 and G2 groups
+  nest(.by = DNA_content) %>%
+  # test differences in G1/G2 % fold change due to Serum (G1-E vs G2-E)
+  mutate(
+    p_value = map_dbl(
+      data,
+      ~ .x %>%
+        # calculate p-value with Mann-Whitney
+        wilcox.test(Percentage_fc ~ Serum, data = .) %>%
+        # tidy test output
+        broom::tidy() %>%
+        # extract p-value
+        .$p.value
+    )
+  )
+
+# Compare G2 % fold change in CTL and IR cells upon G1 enrichment
+df_DNA_content_fc %>%
+  # consider G2 cells only
+  filter(DNA_content == "G2") %>%
+  # split data in CTL and IR groups
+  nest(.by = Condition) %>%
+  # test differences in G2 % fold change due to Serum (G1-E vs G2-E)
+  mutate(
+    p_value = map_dbl(
+      data,
+      ~ .x %>%
+        # calculate p-value with Mann-Whitney
+        wilcox.test(Percentage_fc ~ Serum, data = .) %>%
+        # tidy test output
+        broom::tidy() %>%
+        # extract p-value
+        .$p.value
+    )
+  )
+
+# Compare G2 % fold change in CTL vs IR cells in G1-E conditions
+df_DNA_content_fc %>%
+  # consider G2 cells only
+  filter(DNA_content == "G2") %>%
+  # split data in G1-E and G2-E groups
+  nest(.by = Serum) %>%
+  # test differences in G2 % fold change due to Serum (G1-E vs G2-E)
+  mutate(
+    p_value = map_dbl(
+      data,
+      ~ .x %>%
+        # calculate p-value with Mann-Whitney
+        wilcox.test(Percentage_fc ~ Condition, data = .) %>%
+        # tidy test output
+        broom::tidy() %>%
+        # extract p-value
+        .$p.value
+    )
+  )
 
 ```
 
@@ -554,10 +646,41 @@ percentage_G1G2_fc_all <- plot_fc_G1_G2(df_DNA_content_fc)
 percentage_G1G2_fc_all
 
 # only IR
-percentage_G1G2_fc <- plot_fc_G1_G2(df_DNA_content_fc %>%
-                filter(Condition == "IR")) +
+percentage_G1G2_fc_IR <- plot_fc_G1_G2(
+  df_DNA_content_fc %>%
+    filter(Condition == "IR")
+) +
   facet_grid(. ~ DNA_content)
-percentage_G1G2_fc
+
+percentage_G1G2_fc_IR <- percentage_G1G2_fc_IR +
+  # add pvalue
+  geom_segment(x=1, xend=2, y=2.25,
+               color = "black") +
+  geom_text(x = 1.5, y = 2.25, label = "****",
+            color = "black", vjust = -0.2, size = 3) +
+  scale_y_continuous(limits = c(0,2.4))
+
+percentage_G1G2_fc_IR
+
+# only G2
+percentage_G1G2_fc_G2 <- plot_fc_G1_G2(
+  df_DNA_content_fc %>%
+    filter(DNA_content == "G2")
+) +
+  facet_grid(. ~ Condition) +
+  # add pvalue
+  geom_segment(x=1, xend=2, y=1.25,
+               color = "black") +
+  geom_text(x = 1.5, y = 1.25, label = "****",
+            color = "black", vjust = -0.2, size = 3) +
+  scale_y_continuous(limits = c(0,1.3)) +
+  # adjust plot labels
+  labs(
+    title = "Fold Change G2 Cells",
+    y = "G2 % Fold Change\n(G1-E/G2-E)"
+  )
+
+percentage_G1G2_fc_G2
 
 ```
 
@@ -573,12 +696,12 @@ layout1 <- "
 AA
 BC
 "
-Fig_G1_Enrichment_v1.1 <- placeholder +
+Fig_G1_Enrichment_v1.3 <- placeholder +
   percentage_G1G2 +
-  percentage_G1G2_fc +
+  percentage_G1G2_fc_G2 +
   plot_layout(design = layout1
               ) +
-  plot_annotation(tag_levels = "a") &
+  plot_annotation(tag_levels = "A") &
   theme(plot.title = element_text(size = 10, hjust = 0.5),
         plot.tag = element_text(size = 12, face = "bold", vjust = 2),
         plot.margin = margin(t = 0.5, unit = "cm"),
@@ -594,10 +717,10 @@ Fig_G1_Enrichment_v1.1 <- placeholder +
         )
 
 # remove margin above panel a
-Fig_G1_Enrichment_v1.1[[1]] <- Fig_G1_Enrichment_v1.1[[1]] +
+Fig_G1_Enrichment_v1.3[[1]] <- Fig_G1_Enrichment_v1.3[[1]] +
   theme(plot.margin = margin())
 
-Fig_G1_Enrichment_v1.1
+Fig_G1_Enrichment_v1.3
 
 ```
 
@@ -619,7 +742,7 @@ save_png <- function(figure, name, width = 7.5, height = 10) {
 }
 
 # save png
-save_png(Fig_G1_Enrichment_v1.1, "Fig_G1_Enrichment_v1.1", height = 4.64)
+save_png(Fig_G1_Enrichment_v1.3, "Fig_G1_Enrichment_v1.3", height = 4.64)
 
 ```
 

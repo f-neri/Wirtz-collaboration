@@ -854,6 +854,13 @@ SABGal_EdU_plots
 
 ```
 
+```{r n count}
+df_single_marker$data %>%
+  .[[3]] %>%
+  group_by(Cell.Type, Condition, Serum) %>%
+  summarise(well_count = n())
+```
+
 
 ### Panel SA-$\beta$-Gal & EdU data
 
@@ -1545,6 +1552,23 @@ ICC_2ndMarkers[1:6] <- ICC_2ndMarkers[1:6] %>%
 ICC_2ndMarkers
 ```
 
+```{r n count}
+# yH2AX
+df_ICC_Morph_Serum$data[[which(df_ICC_Morph_Serum$Serum == "FS_SS")]] %>%
+  group_by(Cell.Type, Condition, Serum) %>%
+  summarise(well_count = n())
+
+# p21, LaminB1, HMGB1
+df_ICC_Morph_Serum_2ndMarker %>%
+  filter(Serum == "FS_SS",
+         Channel3 == "p21") %>%
+  .$data %>%
+  .[[1]] %>%
+  group_by(Cell.Type, Condition, Serum, Channel3) %>%
+  summarise(well_count = n())
+
+```
+
 
 ### Panel ICC data
 
@@ -1909,6 +1933,12 @@ Morph_plots[1:6] <- Morph_plots[1:6] %>%
 # print
 Morph_plots
 
+```
+
+```{r n well count}
+df_single_marker_Morph$data[[which(df_single_marker_Morph$Serum == "FS_SS")]] %>%
+  group_by(Cell.Type, Condition, Serum) %>%
+  summarize(well_count = n())
 ```
 
 
@@ -2331,7 +2361,7 @@ Fig_PopData_v6.7 <- Panel_Representative_Images +
   Morph_plots$FS_SS_Area + Morph_plots$FS_SS_SF + coord_cartesian(ylim = c(0.6,1.2)) +
   plot_layout(design = layout5,
               guides = "keep") +
-  plot_annotation(tag_levels = list(c("a", "b", "", "c", "", "#", "#", "d", ""))) &
+  plot_annotation(tag_levels = list(c("A", "B", "", "C", "", "", "", "D", ""))) &
   theme(plot.title = element_text(size = 10, hjust = 0.5),
         plot.tag = element_text(size = 12, face = "bold", vjust = 2),
         plot.margin = margin(t = 0.5, unit = "cm"),
