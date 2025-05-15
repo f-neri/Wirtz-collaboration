@@ -359,6 +359,15 @@ plots_DNA_content_IL6[[1]] + labs(title = "Exp. 1") +
 
 ```
 
+```{r print DNA content, eval=FALSE}
+
+df_thresholds %>%
+  # merge all dataset, and add respective DNA content tresholds
+  unnest(cols = Data) %>%
+  # print to xlsx file
+  openxlsx::write.xlsx(x = ., file = file.path("inst","Fig5_functional-comparison_DNA-content.xlsx"))
+
+```
 
 ```{r df_DNA_content IL6}
 
@@ -491,6 +500,23 @@ G1G2_percentages_plot_IL6 <-  df_DNA_content_IL6 %>%
 G1G2_percentages_plot_IL6
 
 ```
+
+```{r print DNA content percentages, eval=FALSE}
+
+df_DNA_content_IL6 %>%
+  # remove DNA content threshold cols
+  select(Dataset, Data) %>%
+  # merge all datasets
+  unnest(cols = Data) %>%
+  # print as xlsx
+  openxlsx::write.xlsx(x = ., file = file.path(
+    "inst",
+    "Fig5_functional-comparison_DNA-content_percent.xlsx")
+    )
+  
+
+```
+
 
 ```{r IL6 sample count}
 df_DNA_content_IL6 %>%
@@ -625,6 +651,14 @@ df_IL6_concentrations <- df %>%
   mutate(Condition = factor(Condition))
 
 ```
+```{r print IL6 secretion, eval=FALSE}
+
+df_IL6_concentrations %>%
+  # print xlsx
+  openxlsx::write.xlsx(x = ., file = file.path("inst","Fig5_functional-comparison_IL6.xlsx"))
+
+```
+
 
 ### stats
 
@@ -944,6 +978,19 @@ df_DNA_content_ABT263 <- df_thresholds %>%
 
 ```
 
+```{r print DNA content ABT263}
+
+df_DNA_content_ABT263 %>%
+  # remove DNA content tresholds
+  select(Dataset, Data) %>%
+  # merge datasets
+  unnest(cols = Data) %>%
+  # print as xlsx
+  openxlsx::write.xlsx(x = ., file = file.path("inst",
+                                               "Fig5_functional-comparison_ABT263_DNA-content.xlsx")
+                       )
+
+```
 
 ```{r function plot_G1G2_percentages_ABT623}
 
@@ -1160,6 +1207,27 @@ Data_ABT263_G1G2 <- df %>%
   select(Dataset, Data)
 
 ```
+
+```{r print ABT623 viability, eval=FALSE}
+
+Data_ABT263 %>%
+  # merge datasets
+  unnest(cols = Data) %>%
+  # print as xlsx
+  openxlsx::write.xlsx(x = ., file = file.path("inst",
+                                               "Fig5_functional-comparison_ABT263_viability.xlsx")
+                       )
+
+Data_ABT263_G1G2 %>%
+  # merge datasets
+  unnest(cols = Data) %>%
+  # print as xlsx
+  openxlsx::write.xlsx(x = ., file = file.path("inst",
+                                               "Fig5_functional-comparison_ABT263_viability-G1-G2.xlsx")
+                       )
+
+```
+
 
 ## stats
 

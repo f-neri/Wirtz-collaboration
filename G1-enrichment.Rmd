@@ -396,6 +396,7 @@ df_DNA_content
 
 ```
 
+
 ```{r stats df_DNA_content}
 
 # Compare % of G1 cells in G2-E vs G1-E, both for CTL and IR conditions
@@ -434,9 +435,9 @@ plot_G1G2_percentages <- function(Data) {
     group_by(Condition_Serum, Condition, Serum, DNA_content) %>%
     summarise(Percentage = mean(Percentage))
   
-  # generate filtered df, with only G1 data, for geom_point
+  # generate filtered df, with only G2 data, for geom_point
   Data_Filtered <- Data %>%
-    filter(DNA_content == "G1")
+    filter(DNA_content == "G2")
   
   # plot 
   ggplot(Data,
@@ -445,7 +446,7 @@ plot_G1G2_percentages <- function(Data) {
              color = Condition_Serum,
              fill = DNA_content)) +
     geom_col(data = Data_Col,
-             position = "fill",
+             position = position_fill(reverse = TRUE), # reverse = T was used to have G2 proportion at the bottom of stacked bar plot
              size = 1,
              width = 0.5) +
     geom_point(data = Data_Filtered,
@@ -484,6 +485,8 @@ percentage_G1G2 <- percentage_G1G2 +
             color = "black", vjust = -0.2, size = 3) +
   scale_y_continuous(limits = c(0,1.1), breaks = seq(0,1,by=0.2), labels = scales::percent)
 
+percentage_G1G2
+
 
 ```
 
@@ -509,6 +512,16 @@ df_DNA_content_fc <- df_DNA_content %>%
   mutate(
     Condition_Serum = str_c(Condition, Serum, sep = "_")
   )
+
+```
+
+```{r print G1G2 enrichment, eval=FALSE}
+
+df_DNA_content_fc %>%
+  # remove redundant Condition_Serum col
+  select(-Condition_Serum) %>%
+  # print to xlsx file
+  openxlsx::write.xlsx(x = ., file = file.path("inst","G1-G2-enrichment.xlsx"))
 
 ```
 

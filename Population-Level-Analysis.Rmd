@@ -854,6 +854,21 @@ SABGal_EdU_plots
 
 ```
 
+```{r print population data SABGal EdU, eval=FALSE}
+
+# print population level data for SABGal EdU staining
+df_single_marker %>%
+  # extract df with both Serum conditions
+  filter(Serum == "FS_SS") %>%
+  pluck("data", 1) %>%
+  # remove redundant Serum_Condition col
+  select(-Serum_Condition) %>%
+  # print as excel
+  openxlsx::write.xlsx(x = ., file = file.path("inst","population-data_SABGal-EdU.xlsx"))
+
+```
+
+
 ```{r n count}
 df_single_marker$data %>%
   .[[3]] %>%
@@ -1451,6 +1466,18 @@ df_FS_SS <- FS_SS %>%
 
 df_ICC_Morph_Serum_2ndMarker <- df_ICC_Morph_Serum_2ndMarker %>%
   bind_rows(df_FS_SS)
+
+```
+
+```{r print population data ICC, eval=FALSE}
+
+# print population level data for SABGal EdU staining
+df_ICC_Morph_Serum %>%
+  # extract df with both Serum conditions
+  filter(Serum == "FS_SS") %>%
+  pluck("data", 1) %>%
+  # print as excel
+  openxlsx::write.xlsx(x = ., file = file.path("inst","population-data_ICC.xlsx"))
 
 ```
 
